@@ -1,0 +1,2353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Infinite Molecular Dive — Seamless Procedural Zoom</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;800;900&family=Inter:wght@300;400;500;600;700&display=swap');
+        :root {
+            --bg: #040508;
+            --ember: #9333ea;
+            --gold: #38bdf8;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg);
+            color: #f4f4f5;
+            overflow: hidden;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .font-orbitron { font-family: 'Orbitron', sans-serif; }
+        canvas { display: block; touch-action: none; cursor: crosshair; }
+        .glass-hud {
+            background: rgba(8, 10, 18, 0.85);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(147, 51, 234, 0.3);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.9), inset 0 0 15px rgba(56, 189, 248, 0.1);
+        }
+        .glow-ember { box-shadow: 0 0 25px rgba(147, 51, 234, 0.6); }
+        .glow-text { text-shadow: 0 0 12px rgba(56, 189, 248, 0.9), 0 0 24px rgba(147, 51, 234, 0.5); }
+        #vignette {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background: radial-gradient(ellipse at center, rgba(0,0,0,0) 40%, rgba(0,0,0,0.75) 100%);
+        }
+        .toast {
+            opacity: 0;
+            transform: translate(-50%, 24px);
+            transition: opacity .35s ease, transform .35s cubic-bezier(.175,.885,.32,1.275);
+        }
+        .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+        /* every star carries its own procedural name in the sky */
+        #star-labels {
+            position: fixed;
+            inset: 0;
+            z-index: 6;
+            pointer-events: none;
+            overflow: hidden;
+        }
+        .star-label {
+            position: absolute;
+            left: 0;
+            top: 0;
+            display: flex;
+            align-items: baseline;
+            gap: 3px;
+            padding: 1px 4px;
+            border: 1px solid rgba(56, 189, 248, 0.18);
+            border-radius: 3px;
+            background: rgba(2, 6, 14, 0.5);
+            color: #bae6fd;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 8px;
+            line-height: 1.25;
+            letter-spacing: 0.02em;
+            white-space: nowrap;
+            opacity: 0;
+            transform: translate(-50%, -150%);
+            transition: opacity 0.12s ease;
+            will-change: transform, opacity;
+            text-shadow: 0 0 6px rgba(56, 189, 248, 0.3);
+        }
+        .star-label b {
+            color: #7dd3fc;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+        }
+        .star-label span { color: #cbd5e1; }
+        #reticle {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            width: 18px;
+            height: 18px;
+            transform: translate(-50%, -50%);
+            opacity: 0.45;
+            pointer-events: none;
+        }
+        #reticle::before, #reticle::after {
+            content: "";
+            position: absolute;
+            background: #38bdf8;
+        }
+        #reticle::before { left: 8px; width: 2px; height: 18px; }
+        #reticle::after { top: 8px; height: 2px; width: 18px; }
+        input[type=range] { -webkit-appearance: none; background: transparent; }
+        input[type=range]:focus { outline: none; }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 6px;
+            cursor: pointer;
+            background: rgba(20, 20, 30, 0.8);
+            border-radius: 9999px;
+            border: 1px solid rgba(56, 189, 248, 0.3);
+        }
+        input[type=range]::-webkit-slider-thumb {
+            height: 18px;
+            width: 18px;
+            border-radius: 50%;
+            background: #38bdf8;
+            cursor: pointer;
+            -webkit-appearance: none;
+            margin-top: -6px;
+            box-shadow: 0 0 14px #9333ea;
+            transition: transform 0.15s ease, background-color 0.15s ease;
+        }
+        input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.25); background: #fff; }
+    </style>
+</head>
+<body class="relative w-screen h-screen m-0 p-0 overflow-hidden bg-black">
+    <div id="view" class="absolute inset-0 w-full h-full"></div>
+    <div id="vignette"></div>
+    <div id="reticle"></div>
+    <!-- Header HUD -->
+    <div class="absolute top-6 left-6 z-10 pointer-events-none">
+        <div class="glass-hud px-5 py-3.5 rounded-2xl flex items-center gap-4 pointer-events-auto">
+            <div class="w-11 h-11 rounded-xl bg-gradient-to-tr from-purple-700 via-indigo-600 to-sky-400 flex items-center justify-center text-white shadow-lg glow-ember">
+                <i class="fa-solid fa-infinity text-xl animate-pulse"></i>
+            </div>
+            <div>
+                <h1 class="font-orbitron font-extrabold text-sm tracking-wider text-sky-300 glow-text uppercase">
+                    Infinite Molecular Dive
+                </h1>
+                <div class="flex items-center gap-2 mt-0.5">
+                    <span class="w-2 h-2 rounded-full bg-purple-400 animate-ping"></span>
+                    <p id="stage-label" class="text-xs font-semibold text-sky-200/90 font-mono truncate max-w-[280px]">
+                        GENERATING…
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- FPS readout -->
+    <div class="absolute top-[104px] left-6 z-10 pointer-events-none">
+        <div class="glass-hud px-3 py-1.5 rounded-xl flex items-center gap-2 text-[10px] font-mono">
+            <i class="fa-solid fa-gauge-high text-sky-400"></i>
+            <span class="text-zinc-400">FPS</span>
+            <span id="fps-value" class="text-sky-300 font-bold w-7 text-right">--</span>
+        </div>
+    </div>
+    <!-- Spawned molecule counter + solo toggle -->
+    <div class="absolute left-6 bottom-[112px] z-10 flex flex-col items-start gap-2">
+        <div class="glass-hud px-3 py-1.5 rounded-xl flex items-center gap-2 text-[10px] font-mono pointer-events-none">
+            <i class="fa-solid fa-atom text-purple-400"></i>
+            <span class="text-zinc-400">MOLECULES</span>
+            <span id="molecule-count" class="text-purple-300 font-bold w-12 text-right">--</span>
+        </div>
+        <button id="btn-solo" class="glass-hud px-3 py-1.5 rounded-xl flex items-center gap-2 text-[10px] font-orbitron font-bold tracking-wider text-sky-300 hover:text-white transition-colors cursor-pointer">
+            <i id="icon-solo" class="fa-solid fa-layer-group text-purple-400"></i>
+            <span id="text-solo">SOLO CORE</span>
+        </button>
+        <button id="btn-cycle" class="glass-hud px-3 py-1.5 rounded-xl flex items-center gap-2 text-[10px] font-orbitron font-bold tracking-wider text-sky-300 hover:text-white transition-colors cursor-pointer">
+            <i id="icon-cycle" class="fa-solid fa-palette text-purple-400"></i>
+            <span id="text-cycle">COLOR CYCLE</span>
+        </button>
+        <button id="btn-bonds" class="glass-hud px-3 py-1.5 rounded-xl flex items-center gap-2 text-[10px] font-orbitron font-bold tracking-wider text-sky-300 hover:text-white transition-colors cursor-pointer">
+            <i id="icon-bonds" class="fa-solid fa-link text-purple-400"></i>
+            <span id="text-bonds">BONDS: ON</span>
+        </button>
+    </div>
+    <!-- Tuning panel -->
+    <div class="absolute top-[148px] left-6 z-10">
+        <div class="glass-hud px-4 py-3 rounded-2xl flex flex-col gap-3 w-[196px]">
+            <div class="text-[10px] font-orbitron font-bold text-sky-300 border-b border-purple-500/20 pb-1.5 tracking-wider">
+                <i class="fa-solid fa-sliders mr-1.5 text-purple-400"></i>TUNING
+            </div>
+            <label class="flex flex-col gap-1">
+                <span class="flex justify-between text-[10px] font-mono text-zinc-400">
+                    <span>CAMERA SPEED</span>
+                    <span id="val-look" class="text-sky-400 font-bold">1×</span>
+                </span>
+                <input id="tune-look" type="range" min="20" max="300" value="100" step="5">
+            </label>
+            <label class="flex flex-col gap-1">
+                <span class="flex justify-between text-[10px] font-mono text-zinc-400">
+                    <span>MOVE SPEED</span>
+                    <span id="val-move" class="text-sky-400 font-bold">1×</span>
+                </span>
+                <input id="tune-move" type="range" min="10" max="3000" value="100" step="25">
+            </label>
+            <label class="flex flex-col gap-1">
+                <span class="flex justify-between text-[10px] font-mono text-zinc-400">
+                    <span>ZOOM SPEED</span>
+                    <span id="val-zoom" class="text-sky-400 font-bold">1×</span>
+                </span>
+                <input id="tune-zoom" type="range" min="10" max="400" value="100" step="5">
+            </label>
+        </div>
+    </div>
+    <!-- Procedural milestone nodes -->
+    <div class="absolute top-6 right-6 z-10 pointer-events-none">
+        <div class="glass-hud px-4 py-3 rounded-2xl pointer-events-auto flex flex-col gap-2 min-w-[248px]">
+            <div class="flex items-center justify-between text-xs font-orbitron text-sky-300 font-bold border-b border-purple-500/20 pb-1.5">
+                <span><i class="fa-solid fa-compass mr-1.5"></i>FRACTAL NODES</span>
+                <span id="target-count" class="text-purple-400 font-mono">0 / 7</span>
+            </div>
+            <div id="target-list" class="flex flex-col gap-1.5 text-[11px] font-mono"></div>
+        </div>
+    </div>
+    <!-- Discovery toast -->
+    <div id="found-toast" class="toast fixed bottom-32 left-1/2 z-20 pointer-events-none">
+        <div class="glass-hud px-6 py-3 rounded-2xl border-purple-400/50 flex items-center gap-3 shadow-2xl glow-ember">
+            <i class="fa-solid fa-sparkles text-2xl text-purple-400 animate-bounce"></i>
+            <div>
+                <div class="text-xs font-orbitron font-bold text-sky-300">NODE REACHED</div>
+                <div id="found-name" class="text-xs font-mono text-white">—</div>
+            </div>
+        </div>
+    </div>
+    <!-- Control dock -->
+    <div class="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 w-11/12 max-w-3xl">
+        <div class="glass-hud p-4 rounded-3xl flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div class="flex items-center gap-2.5 w-full sm:w-auto justify-center">
+                <button id="btn-auto" title="Toggle auto zoom" class="h-11 px-5 rounded-2xl bg-purple-600 hover:bg-purple-500 text-white font-extrabold text-xs font-orbitron tracking-wider transition shadow-lg glow-ember flex items-center gap-2">
+                    <i id="icon-auto" class="fa-solid fa-pause"></i>
+                    <span id="text-auto">AUTO: ON</span>
+                </button>
+                <button id="btn-speed" title="Reverse zoom direction" class="h-11 px-4 rounded-2xl bg-zinc-900/90 hover:bg-zinc-800 text-sky-300 border border-purple-500/30 flex items-center gap-2 text-xs font-mono tracking-wider transition">
+                    <i id="icon-dir" class="fa-solid fa-forward text-sky-400"></i>
+                    <span id="text-dir">INWARD</span>
+                </button>
+                <button id="btn-reset" title="Reset to the outer chamber" class="w-11 h-11 rounded-2xl bg-zinc-900/90 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-purple-500/20 flex items-center justify-center text-sm transition">
+                    <i class="fa-solid fa-rotate-left"></i>
+                </button>
+            </div>
+            <div class="text-[11px] font-mono text-sky-300/80 bg-black/50 px-3 py-1.5 rounded-xl border border-sky-500/20 hidden lg:block">
+                <i class="fa-solid fa-keyboard mr-1.5 text-purple-400"></i>WASD fly · Drag to look · Scroll dives into the cursor
+            </div>
+            <div class="flex items-center gap-3 w-full sm:w-auto justify-center px-2">
+                <div class="flex flex-col gap-1 w-48">
+                    <div class="flex justify-between items-center text-[10px] font-mono text-zinc-400">
+                        <span>MAGNIFICATION</span>
+                        <span id="label-mag" class="text-sky-400 font-bold">×1</span>
+                    </div>
+                    <input id="slider-zoom" type="range" min="0" max="1000" value="0" step="1">
+                    <div class="flex justify-between text-[9px] font-mono text-zinc-500 mt-0.5">
+                        <span id="label-scale">DEPTH 0</span>
+                        <span class="text-purple-400/70">∞</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script type="module">
+        import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+        /* ================================================================
+           INFINITE MOLECULAR DIVE
+           The world is a chain of concentrically nested 3D structures.
+           Each structure is an exact 45% scaled clone of the one that
+           contains it, and lives in the radius band [0.45 .. 1.0], so the
+           shells tile perfectly with no overlap:
+               level 0 : 0.450 .. 1.000
+               level 1 : 0.202 .. 0.450
+               level 2 : 0.091 .. 0.202   ...
+           The camera sits on the +Z axis at radius CAM_R * S^fraction and
+           dives inward. When it reaches the end of a cycle the whole chain
+           is rebased by 1/S and the camera jumps back out by exactly the
+           same factor, so the image is continuous to the pixel - and the
+           numbers stay bounded forever. Infinite zoom, O(1) memory.
+           ================================================================ */
+        const CFG = {
+            seed: 0x9E3779B9,
+            S: 0.45,           // nesting ratio (also the shell gap)
+            INNER: 0.45,       // inner radius of any structure
+            CAM_R: 1.72,       // camera distance at the start of a cycle
+            SPEED: 0.24,       // cycles per second
+            AHEAD: 4,
+            BEHIND: 2,          // keep the road you came from populated
+            HUE_BASE: 0.55,
+            HUE_STEP: 0.13
+        };
+        /* ------------------------- seeded maths ------------------------- */
+        function hash32(n) {
+            let x = Math.imul(n | 0, 0x9E3779B1);
+            x ^= x >>> 15;
+            x = Math.imul(x, 0x85EBCA6B);
+            x ^= x >>> 13;
+            x = Math.imul(x, 0xC2B2AE35);
+            x ^= x >>> 16;
+            return x >>> 0;
+        }
+        function mulberry32(a) {
+            return function () {
+                a = (a + 0x6D2B79F5) | 0;
+                let t = Math.imul(a ^ (a >>> 15), 1 | a);
+                t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+                return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+            };
+        }
+        const hueAt = d => ((CFG.HUE_BASE + d * CFG.HUE_STEP) % 1 + 1) % 1;
+        /* ------------------------- renderer ----------------------------- */
+        const host = document.getElementById('view');
+        const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.0;
+        host.appendChild(renderer.domElement);
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x04050a);
+        // Tight near/far planes: the deepest structure is ~0.09 units across.
+        const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.004, 20000);
+        /* ------------------------- lighting -----------------------------
+           No lights at all. No hemisphere, no key, no fill, no rim, no
+           emission. Every material below is unlit, so what you see is the
+           molecule's own flat colour and nothing else.
+           ---------------------------------------------------------------- */
+        /* ------------------------ shared assets ------------------------- */
+        /* Mucus tendril: a unit-length tube that snakes along its length and
+           tapers into the atoms at both ends. Scaled uniformly to the bond
+           length, so the wobble stays visible at every size. */
+        function makeMucusBond(radial = 8, segments = 20, amp = 0.06) {
+            const g = new THREE.CylinderGeometry(0.0135, 0.0135, 1, radial, segments, false);
+            const pos = g.attributes.position;
+
+            for (let i = 0; i < pos.count; i++) {
+                const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+                const t = y + 0.5;                              // 0..1 along the bond
+                const taper = Math.sin(Math.PI * t);            // pinch at both atoms
+                const w = Math.sin(t * Math.PI * 3.0 + 0.6) * amp * 0.55 * taper;
+                const w2 = Math.cos(t * Math.PI * 4.0 - 0.3) * amp * 0.34 * taper;
+                const fat = 1 + 0.22 * Math.sin(t * Math.PI * 2.0);
+                pos.setXYZ(i, (x + w) * fat, y, (z + w2) * fat);
+            }
+
+            pos.needsUpdate = true;
+            g.computeVertexNormals();
+            return g;
+        }
+
+        const GEO = {
+            bondLite: makeMucusBond(4, 8, 0.06),
+            atom: new THREE.SphereGeometry(1, 18, 12),
+            wallAtom: new THREE.SphereGeometry(1, 12, 8),
+            bond: makeMucusBond(),
+            ring: new THREE.TorusGeometry(1, 0.009, 6, 64),
+            node: new THREE.IcosahedronGeometry(1, 0),
+            shard: new THREE.OctahedronGeometry(1, 0),
+            glow: new THREE.PlaneGeometry(1, 1)   // one halo billboard per atom
+        };
+        /* ------------------- procedural masonry -------------------------
+           One grayscale block texture drives both colour and relief, so
+           the stone reads as real masonry under the key light instead of
+           flat polygons. 512px = 8x8 blocks per tile.
+           ------------------------------------------------------------------ */
+        function makeMasonry() {
+            const size = 512;
+            const colorCv = document.createElement('canvas');
+            const bumpCv = document.createElement('canvas');
+            colorCv.width = colorCv.height = size;
+            bumpCv.width = bumpCv.height = size;
+            const cctx = colorCv.getContext('2d');
+            const bctx = bumpCv.getContext('2d');
+            const rng = mulberry32(0x51A7E);
+            cctx.fillStyle = '#0a0c11';
+            cctx.fillRect(0, 0, size, size);
+            bctx.fillStyle = '#000000';
+            bctx.fillRect(0, 0, size, size);
+            const rows = 8, cols = 8, cw = size / cols, ch = size / rows;
+            for (let r = 0; r < rows; r++) {
+                const shift = (r % 2) * cw * 0.5;
+                for (let c = -1; c <= cols; c++) {
+                    const x = c * cw + shift, y = r * ch;
+                    const v = 92 + Math.floor(rng() * 46);
+                    cctx.fillStyle = `rgb(${v},${v + 4},${v + 13})`;
+                    cctx.fillRect(x + 2, y + 2, cw - 4, ch - 4);
+                    const hv = 118 + Math.floor(rng() * 92);
+                    bctx.fillStyle = `rgb(${hv},${hv},${hv})`;
+                    bctx.fillRect(x + 2, y + 2, cw - 4, ch - 4);
+                    cctx.strokeStyle = 'rgba(255,255,255,0.08)';
+                    cctx.strokeRect(x + 2.5, y + 2.5, cw - 5, ch - 5);
+                }
+            }
+            const cimg = cctx.getImageData(0, 0, size, size);
+            const bimg = bctx.getImageData(0, 0, size, size);
+            const cd = cimg.data, bd = bimg.data;
+            for (let i = 0; i < cd.length; i += 4) {
+                const n = (rng() - 0.5) * 34;
+                cd[i] = Math.max(0, Math.min(255, cd[i] + n));
+                cd[i + 1] = Math.max(0, Math.min(255, cd[i + 1] + n));
+                cd[i + 2] = Math.max(0, Math.min(255, cd[i + 2] + n));
+                const b = Math.max(0, Math.min(255, bd[i] + n * 0.7));
+                bd[i] = bd[i + 1] = bd[i + 2] = b;
+            }
+            cctx.putImageData(cimg, 0, 0);
+            bctx.putImageData(bimg, 0, 0);
+            const map = new THREE.CanvasTexture(colorCv);
+            map.wrapS = map.wrapT = THREE.RepeatWrapping;
+            map.colorSpace = THREE.SRGBColorSpace;
+            map.anisotropy = renderer.capabilities.getMaxAnisotropy();
+            const bump = new THREE.CanvasTexture(bumpCv);
+            bump.wrapS = bump.wrapT = THREE.RepeatWrapping;
+            bump.anisotropy = map.anisotropy;
+            return { map, bump };
+        }
+        const MASONRY = makeMasonry();
+        const TILE = 0.5;   // world units covered by one texture tile
+        /* ------------------- atom-field surface -------------------------
+           The building surfaces are not photographic stone: every texel is
+           an atom of a glowing lattice, so the closer you look the more the
+           surface reads as a field of atoms. Used as colour AND emission.
+           ------------------------------------------------------------------ */
+        function makeAtomField() {
+            const size = 512, cells = 16, cell = size / cells;
+            const colorCv = document.createElement('canvas');
+            const bumpCv = document.createElement('canvas');
+            colorCv.width = colorCv.height = size;
+            bumpCv.width = bumpCv.height = size;
+            const c = colorCv.getContext('2d');
+            const b = bumpCv.getContext('2d');
+            const rng = mulberry32(0xA705E1);
+            c.fillStyle = '#04070e';
+            c.fillRect(0, 0, size, size);
+            b.fillStyle = '#000000';
+            b.fillRect(0, 0, size, size);
+            // lattice bonds
+            c.lineWidth = 1.7;
+            c.strokeStyle = 'rgba(40,110,210,0.5)';
+            for (let y = 0; y < cells; y++) {
+                for (let x = 0; x < cells; x++) {
+                    const px = x * cell + cell / 2, py = y * cell + cell / 2;
+                    c.beginPath(); c.moveTo(px, py); c.lineTo(px + cell, py); c.stroke();
+                    c.beginPath(); c.moveTo(px, py); c.lineTo(px, py + cell); c.stroke();
+                }
+            }
+            // glowing atoms on every lattice node
+            for (let y = 0; y < cells; y++) {
+                for (let x = 0; x < cells; x++) {
+                    const px = x * cell + cell / 2, py = y * cell + cell / 2;
+                    const rad = cell * (0.15 + rng() * 0.1);
+                    const warm = rng() < 0.16;
+                    const core = warm ? '255,205,170' : '200,240,255';
+                    const mid = warm ? '255,80,30' : '50,140,255';
+                    const glow = c.createRadialGradient(px, py, 0, px, py, rad * 3.4);
+                    glow.addColorStop(0, `rgba(${core},0.95)`);
+                    glow.addColorStop(0.22, `rgba(${mid},0.5)`);
+                    glow.addColorStop(1, 'rgba(0,0,0,0)');
+                    c.fillStyle = glow;
+                    c.beginPath(); c.arc(px, py, rad * 3.4, 0, Math.PI * 2); c.fill();
+                    const bd = b.createRadialGradient(px, py, 0, px, py, rad * 1.8);
+                    bd.addColorStop(0, 'rgba(255,255,255,1)');
+                    bd.addColorStop(1, 'rgba(0,0,0,0)');
+                    b.fillStyle = bd;
+                    b.beginPath(); b.arc(px, py, rad * 1.8, 0, Math.PI * 2); b.fill();
+                }
+            }
+            const map = new THREE.CanvasTexture(colorCv);
+            map.wrapS = map.wrapT = THREE.RepeatWrapping;
+            map.colorSpace = THREE.SRGBColorSpace;
+            map.anisotropy = renderer.capabilities.getMaxAnisotropy();
+            const bump = new THREE.CanvasTexture(bumpCv);
+            bump.wrapS = bump.wrapT = THREE.RepeatWrapping;
+            bump.anisotropy = map.anisotropy;
+            return { map, bump };
+        }
+        /* soft radial halo used to fake bloom around every atom */
+        function makeGlowTexture() {
+            const size = 128;
+            const cv = document.createElement('canvas');
+            cv.width = cv.height = size;
+            const g = cv.getContext('2d');
+            const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+            grad.addColorStop(0, 'rgba(255,255,255,1)');
+            grad.addColorStop(0.22, 'rgba(255,255,255,0.6)');
+            grad.addColorStop(0.5, 'rgba(255,255,255,0.16)');
+            grad.addColorStop(1, 'rgba(255,255,255,0)');
+            g.fillStyle = grad;
+            g.fillRect(0, 0, size, size);
+            const tex = new THREE.CanvasTexture(cv);
+            tex.colorSpace = THREE.SRGBColorSpace;
+            return tex;
+        }
+        const ATOMFIELD = makeAtomField();
+        const GLOW_TEX = makeGlowTexture();
+        /* ================================================================
+           THE BLOOM AROUND EVERY ATOM
+           The reference plate is lit by the molecule itself: a soft halo
+           blooms out of every sphere. Each atom gets one camera-facing
+           additive quad sized to its own radius - two triangles, no
+           post-processing pass, no render target. The quad is pushed just
+           in front of its own sphere so its depth never eats the halo.
+           ================================================================ */
+        const GLOW_SCALE = 2.4;      // halo radius, in atom radii
+        function makeGlowMaterial(strength) {
+            const m = new THREE.MeshBasicMaterial({
+                color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending,
+                depthWrite: false, side: THREE.DoubleSide, fog: false
+            });
+            m.onBeforeCompile = shader => {
+                shader.uniforms.uGlowScale = { value: GLOW_SCALE };
+                shader.uniforms.uGlowStrength = { value: strength };
+                shader.vertexShader = shader.vertexShader
+                    .replace('#include <common>', `#include <common>
+                        varying vec2 vGlowUv;
+                        varying vec3 vGlowCol;
+                        uniform float uGlowScale;`)
+                    .replace('#include <begin_vertex>', `#include <begin_vertex>
+                        vGlowUv = uv;`)
+                    .replace('#include <project_vertex>', `
+                        mat4 inst = instanceMatrix;
+                        mat4 worldInst = modelMatrix * inst;
+                        vec4 centre = modelViewMatrix * inst * vec4(0.0, 0.0, 0.0, 1.0);
+                        // the instance scale carries the atom radius x GLOW_SCALE
+                        float haloR = length(worldInst[0].xyz) / uGlowScale;
+                        centre.xy += position.xy * 2.0 * haloR * uGlowScale;
+                        centre.z += haloR * 1.15;
+                        vGlowCol = instanceColor;
+                        gl_Position = projectionMatrix * centre;
+                    `);
+                shader.fragmentShader = shader.fragmentShader
+                    .replace('#include <common>', `#include <common>
+                        varying vec2 vGlowUv;
+                        varying vec3 vGlowCol;
+                        uniform float uGlowStrength;`)
+                    .replace('#include <color_fragment>', `#include <color_fragment>
+                        float gd = length(vGlowUv * 2.0 - 1.0);
+                        float halo = pow(max(0.0, 1.0 - gd), 2.6);
+                        float hot = pow(max(0.0, 1.0 - gd * 1.7), 5.0);
+                        diffuseColor.rgb = vGlowCol * halo * uGlowStrength + vec3(hot) * 0.5;
+                        diffuseColor.a = clamp(halo * 0.9 + hot * 0.5, 0.0, 1.0);`);
+            };
+            return m;
+        }
+        /* ================================================================
+           ANIMATED ATOM SURFACE
+           Every sphere is shaded in the fragment shader with a moving
+           plasma field sampled from its world position, so each atom
+           carries its own drifting energy texture instead of a flat
+           plastic ball. Adds nothing to the vertex budget.
+           ================================================================ */
+        const ATOM_TIME = { value: 0 };
+        /* shared colour-cycle state: every atom and bond shader reads these */
+        const ATOM_TINT = { value: new THREE.Color(0.4, 0.8, 1.0) };
+        const ATOM_CYCLE = { value: 0 };
+        const cycleTarget = new THREE.Color();
+        function makeAtomMaterial(emissiveHex, speed) {
+            /* unlit: there are no lights in this scene, so the sphere is
+               simply its own colour. The plasma field only shifts that
+               colour around, it never adds light. */
+            const material = new THREE.MeshBasicMaterial({
+                color: 0xffffff, transparent: false, depthWrite: true, fog: false
+            });
+            material.onBeforeCompile = shader => {
+                shader.uniforms.uTime = ATOM_TIME;
+                shader.uniforms.uTimeV = ATOM_TIME;
+                shader.uniforms.uSpeed = { value: speed };
+                shader.uniforms.uTint = ATOM_TINT;
+                shader.uniforms.uCycle = ATOM_CYCLE;
+                shader.vertexShader = shader.vertexShader
+                    .replace('#include <common>', `#include <common>
+                        varying vec3 vAtomPos;
+                        varying vec3 vAtomNormal;
+                        varying vec3 vViewPos;
+                        uniform float uTimeV;`)
+                    .replace('#include <begin_vertex>', `#include <begin_vertex>
+                        // morph: every sphere slowly breathes out of round
+                        float wob = sin(position.x * 7.0 + uTimeV * 1.9)
+                                  * sin(position.y * 9.0 - uTimeV * 1.4)
+                                  * sin(position.z * 8.0 + uTimeV * 1.1);
+                        transformed += normalize(position) * wob * 0.05;`)
+                    .replace('#include <project_vertex>', `
+                        vec4 mvPosition = vec4(transformed, 1.0);
+                        #ifdef USE_INSTANCING
+                            mvPosition = instanceMatrix * mvPosition;
+                        #endif
+                        vAtomPos = (modelMatrix * mvPosition).xyz;
+                        // instance matrices here are uniform scale + offset,
+                        // so the view-space normal survives untouched
+                        vAtomNormal = normalize(normalMatrix * normal);
+                        mvPosition = modelViewMatrix * mvPosition;
+                        vViewPos = mvPosition.xyz;
+                        gl_Position = projectionMatrix * mvPosition;
+                    `);
+                shader.fragmentShader = shader.fragmentShader
+                    .replace('#include <common>', `#include <common>
+                        varying vec3 vAtomPos;
+                        varying vec3 vAtomNormal;
+                        varying vec3 vViewPos;
+                        uniform float uTime;
+                        uniform float uSpeed;
+                        uniform vec3 uTint;
+                        uniform float uCycle;
+                        float atomEnergy(vec3 p) {
+                            float t = uTime * uSpeed;
+                            float a = sin(p.x * 21.0 + t) * sin(p.y * 19.0 - t * 0.8) * sin(p.z * 23.0 + t * 0.6);
+                            float b = sin(p.y * 41.0 - t * 1.6) * sin(p.z * 37.0 + t * 1.2) * sin(p.x * 43.0 - t * 0.9);
+                            return 0.5 + 0.34 * a + 0.18 * b;
+                        }`)
+                    .replace('#include <color_fragment>', `#include <color_fragment>
+                        float energy = atomEnergy(vAtomPos);
+                        /* how squarely this point of the sphere faces the eye */
+                        float facing = clamp(dot(normalize(vAtomNormal), normalize(-vViewPos)), 0.0, 1.0);
+                        /* saturated neon body, breathing with the plasma field */
+                        vec3 neon = diffuseColor.rgb * (0.80 + 0.60 * energy);
+                        /* the white-hot centre every sphere in the plate has */
+                        float core = pow(facing, 2.6);
+                        neon = mix(neon, vec3(1.0), core * 0.60);
+                        /* and a thin burning rim at the silhouette */
+                        float rim = pow(1.0 - facing, 3.2);
+                        neon += neon * rim * 1.45 + vec3(0.30, 0.45, 0.75) * rim * 0.30 * energy;
+                        diffuseColor.rgb = mix(neon, uTint, uCycle * 0.65);`);
+            };
+            return material;
+        }
+        const MAT = {
+            // neon atom families: glossy cores lit by a coloured emission
+            atomCool: makeAtomMaterial(0x0a35c8, 1.0),
+            atomWarm: makeAtomMaterial(0xb81400, 1.35),
+            atomWhite: makeAtomMaterial(0x5aa8e8, 0.7),
+            glow: makeGlowMaterial(0.85),
+            // a luminous strand instead of a see-through grey rod
+            bond: (() => {
+                /* additive tube: tinted by the two atoms it joins, burning
+                   white along its core and glowing at its silhouette */
+                const m = new THREE.MeshBasicMaterial({
+                    color: 0xffffff, transparent: true, opacity: 0.95,
+                    depthWrite: false, side: THREE.DoubleSide, fog: false,
+                    blending: THREE.AdditiveBlending
+                });
+                m.onBeforeCompile = shader => {
+                    shader.uniforms.uTime = ATOM_TIME;
+                    shader.vertexShader = shader.vertexShader
+                        .replace('#include <common>', `#include <common>
+                            uniform float uTime;
+                            varying vec3 vBondNormal;
+                            varying vec3 vBondView;`)
+                        .replace('#include <begin_vertex>', `#include <begin_vertex>
+                            float k = 0.5 - abs(position.y);
+                            // living squiggles: the strand snakes while it hangs
+                            transformed.x += sin(position.y * 9.0 + uTime * 1.5) * 0.05 * k;
+                            transformed.z += cos(position.y * 7.0 + uTime * 1.1) * 0.042 * k;
+                            transformed.x += sin(position.y * 21.0 - uTime * 2.4) * 0.012 * k;`)
+                        .replace('#include <project_vertex>', `
+                            vec4 mvPosition = instanceMatrix * vec4(transformed, 1.0);
+                            // bonds are scaled uniformly, so the normal is safe
+                            vBondNormal = normalize(normalMatrix * mat3(instanceMatrix) * normal);
+                            mvPosition = modelViewMatrix * mvPosition;
+                            vBondView = mvPosition.xyz;
+                            gl_Position = projectionMatrix * mvPosition;
+                        `);
+                    shader.fragmentShader = shader.fragmentShader
+                        .replace('#include <common>', `#include <common>
+                            varying vec3 vBondNormal;
+                            varying vec3 vBondView;`)
+                        .replace('#include <color_fragment>', `#include <color_fragment>
+                            float facing = abs(dot(normalize(vBondNormal), normalize(-vBondView)));
+                            // 1 in the middle of the tube, 0 at its silhouette
+                            float rim = pow(1.0 - facing, 1.7);
+                            vec3 strand = diffuseColor.rgb * (1.05 + 1.7 * rim);
+                            strand = mix(strand, vec3(1.0), 0.28 + 0.34 * rim);
+                            diffuseColor.rgb = strand;
+                            diffuseColor.a = clamp(0.40 + 0.75 * rim, 0.0, 1.0);`);
+                };
+                return m;
+            })(),
+            ring: new THREE.MeshBasicMaterial({ color: 0xbfe4ff, fog: false }),
+            shard: new THREE.MeshBasicMaterial({ color: 0xffffff, fog: false }),
+            wall: new THREE.MeshBasicMaterial({ map: ATOMFIELD.map, color: 0x35507a, fog: false }),
+            plinth: new THREE.MeshBasicMaterial({ map: MASONRY.map, color: 0x5c6579, fog: false }),
+            slate: new THREE.MeshBasicMaterial({ map: MASONRY.map, color: 0x2b3342, fog: false })
+        };
+        const dummy = new THREE.Object3D();
+        const UP = new THREE.Vector3(0, 1, 0);
+        const WHITE = new THREE.Color(0xffffff);
+        const camEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+        const camFwd = new THREE.Vector3();
+        const camRight = new THREE.Vector3();
+        const camTmp = new THREE.Vector3();
+        const aimStep = new THREE.Vector3();
+        const hitPoint = new THREE.Vector3();
+        const pointerNDC = new THREE.Vector2(0, 0);
+        const raycaster = new THREE.Raycaster();
+        raycaster.params.Points.threshold = 0.015;
+        /* ================================================================
+           EVERY SPHERE IS A MOLECULE
+           A hit on an instanced atom returns the sphere's own centre and
+           world radius, never a point sliding around on its skin. That is
+           the difference between skimming a ball and diving into it.
+           ================================================================ */
+        const atomM4 = new THREE.Matrix4();
+        const atomP = new THREE.Vector3();
+        const atomQ = new THREE.Quaternion();
+        const atomS = new THREE.Vector3();
+        function atomUnderPointer(chain) {
+            if (!chain) return null;
+            raycaster.setFromCamera(pointerNDC, camera);
+            raycaster.far = 20000;
+            const hits = raycaster.intersectObject(chain.root, true);
+            for (const h of hits) {
+                const obj = h.object;
+                if (!obj.isInstancedMesh || obj.instanceId == null) continue;
+                /* only the spherical matter - bonds are cylinders and their
+                   "radius" is their length */
+                if (obj.geometry !== GEO.atom && obj.geometry !== GEO.node) continue;
+                obj.getMatrixAt(obj.instanceId, atomM4);
+                atomM4.premultiply(obj.matrixWorld);
+                atomM4.decompose(atomP, atomQ, atomS);
+                const r = Math.max(atomS.x, atomS.y, atomS.z);
+                if (!(r > 1e-9) || !isFinite(r)) continue;
+                return { point: atomP.clone(), radius: r };
+            }
+            return null;
+        }
+        /* ================================================================
+           THE UNIVERSE IS MADE OF THE SAME MOLECULES
+           Every star is generated by the same makeStructure() that builds
+           the exhibit - same atoms, same bonds, same neon families - then
+           placed on a shell and scaled to it. Nothing out there is a
+           sprite or a hand-made stand-in: each star is one of these
+           molecules, and the shells double outward without end.
+           ================================================================ */
+        /* ================================================================
+           EVERY STAR IS AN EXACT COPY OF THE CORE
+           The template below is generated by the very same makeStructure()
+           call the centre of the universe uses, and carries the same atom
+           radii (x1.7), the same spectral families, the same recursive
+           satellites and the same mucus bonds. Each star is that molecule
+           rotated and scaled - not a lookalike, the same thing.
+           ================================================================ */
+        function moleculeTemplate(index, seedShift) {
+            const s = makeStructure(index, seedShift || 0);
+            const families = [[], [], []];
+            s.atoms.forEach(a => families[a.t || 0].push({ p: a.p.clone(), r: a.r * 1.7, c: a.c }));
+            const bonds = s.bonds.map(b => ({
+                a: b.a.clone(), b: b.b.clone(),
+                c: b.ca.clone().lerp(b.cb, 0.5).lerp(WHITE, 0.32)
+            }));
+            const sats = [];
+            s.atoms.forEach((atom, ai) => {
+                const ar = atom.r * 1.7;
+                const seed = hash32(ai * 7919);
+                const phase = ((seed & 1023) / 1023) * Math.PI * 2;
+                const tilt = (((seed >>> 10) & 255) / 255) * Math.PI;
+                const orbit = ar * 1.5;
+                for (let m = 0; m < 2; m++) {
+                    const a = phase + m * Math.PI;
+                    const sat = new THREE.Vector3(
+                        atom.p.x + Math.cos(a) * orbit * Math.cos(tilt),
+                        atom.p.y + Math.sin(tilt) * orbit,
+                        atom.p.z + Math.sin(a) * orbit * Math.cos(tilt)
+                    );
+                    const satR = ar * 0.42;
+                    const tint = atom.c.clone().lerp(WHITE, 0.4);
+                    sats.push({ p: sat, r: satR, c: tint });
+                    for (let k = 0; k < 2; k++) {
+                        const ca = a + Math.PI * 0.5 + k * Math.PI;
+                        sats.push({
+                            p: new THREE.Vector3(
+                                sat.x + Math.cos(ca) * satR * 1.9,
+                                sat.y + Math.sin(ca * 0.7) * satR * 1.5,
+                                sat.z + Math.sin(ca) * satR * 1.9
+                            ),
+                            r: satR * 0.5,
+                            c: tint
+                        });
+                    }
+                }
+            });
+            return { families, bonds, sats, nA: s.atoms.length, nB: s.bonds.length };
+        }
+
+        /* one exact copy of the core, then a family of procedurally generated
+           molecules for the endless dive - every fold is a new molecule */
+        const CORE_TEMPLATE = moleculeTemplate(0, 0);
+        const STAR_VARIANTS = [CORE_TEMPLATE];
+        for (let v = 1; v <= 12; v++) STAR_VARIANTS.push(moleculeTemplate(v * 5 + 1, 71 + v * 13));
+        const STAR_MOST = STAR_VARIANTS.reduce((acc, t) => ({
+            fam: acc.fam.map((n, i) => Math.max(n, t.families[i].length)),
+            sats: Math.max(acc.sats, t.sats.length),
+            bonds: Math.max(acc.bonds, t.bonds.length)
+        }), { fam: [1, 1, 1], sats: 1, bonds: 1 });
+
+        /* ================================================================
+           A HOUSE BUILT OUT OF SPAWNED MOLECULES
+           Every universe needs a landmark. These molecules are spawned
+           along the frame of a house - base, corners, wall tops, gable
+           roof, ridge, plus a door and two windows - out of the same
+           procedural molecules as the rest of the sky. The points walk
+           their edges with a seeded jitter, so the spacing wobbles like
+           something grown rather than a wireframe grid.
+           ================================================================ */
+        const HOUSE_ORIGIN = new THREE.Vector3(0.30, 0.16, -0.94).normalize().multiplyScalar(2600);
+        const HOUSE_POINTS = (() => {
+            const rng = mulberry32(0x48A05E);
+            const S = 1700;                       // width across the gable end
+            const hx = S * 0.5, hz = S * 0.34;     // half width / half depth
+            const eave = S * 0.42, ridge = S * 0.78;
+            const P = [];
+            const B = [[-hx, -hz], [hx, -hz], [hx, hz], [-hx, hz]];
+            const edge = (ax, ay, az, bx, by, bz) => {
+                const dx = bx - ax, dy = by - ay, dz = bz - az;
+                const len = Math.hypot(dx, dy, dz) || 1;
+                const steps = Math.max(1, Math.round(len / 400));
+                for (let k = 0; k < steps; k++) {
+                    const t = (k + 0.5 + (rng() - 0.5) * 0.5) / steps;
+                    P.push(new THREE.Vector3(
+                        ax + dx * t + (rng() - 0.5) * 16,
+                        ay + dy * t + (rng() - 0.5) * 16,
+                        az + dz * t + (rng() - 0.5) * 16
+                    ));
+                }
+            };
+            for (let i = 0; i < 4; i++) {
+                const a = B[i], b = B[(i + 1) % 4];
+                edge(a[0], 0, a[1], b[0], 0, b[1]);          // base
+                edge(a[0], eave, a[1], b[0], eave, b[1]);    // wall tops
+                edge(a[0], 0, a[1], a[0], eave, a[1]);       // corners
+            }
+            for (const sx of [-1, 1]) {
+                edge(sx * hx, eave, -hz, sx * hx, ridge, 0);  // roof slant
+                edge(sx * hx, eave, hz, sx * hx, ridge, 0);   // roof slant
+            }
+            edge(-hx, ridge, 0, hx, ridge, 0);                // ridge
+            /* a door in the front wall and a window either side of it */
+            P.push(new THREE.Vector3(0, eave * 0.16, hz));
+            P.push(new THREE.Vector3(0, eave * 0.64, hz));
+            P.push(new THREE.Vector3(-hx * 0.58, eave * 0.60, hz));
+            P.push(new THREE.Vector3(hx * 0.58, eave * 0.60, hz));
+            return P;
+        })();
+
+        const STAR_PER = STAR_MOST.fam[0] + STAR_MOST.fam[1] + STAR_MOST.fam[2] + STAR_MOST.sats + STAR_MOST.bonds;
+        /* the house gets its own slots on top of the sky budget, so the field
+           keeps every molecule it had before the house was added */
+        const STAR_TOTAL = Math.max(90, Math.min(420, Math.floor(220000 / STAR_PER))) + HOUSE_POINTS.length;
+        const STAR_NEAR = 420;
+        const STAR_FAR = 12000;
+        /* the sky is born out to STAR_FAR, so the recycle radius has to sit
+           outside it - otherwise every molecule further away than the wrap
+           radius is rebuilt the instant it is created, and the sky churns */
+        const STAR_WRAP = 14000;
+        const STAR_REBIRTH_NEAR = 0.72;   // where a recycled molecule reappears (x STAR_FAR)
+
+        const starField = new THREE.Group();
+        scene.add(starField);
+
+        const STAR_MATS = [MAT.atomCool, MAT.atomWarm, MAT.atomWhite];
+        const starFamilyCap = STAR_MOST.fam;
+        const starFamilyMeshes = starFamilyCap.map((cap, i) =>
+            new THREE.InstancedMesh(GEO.atom, STAR_MATS[i], STAR_TOTAL * cap));
+        const starSatMesh = new THREE.InstancedMesh(GEO.node, MAT.atomWhite, STAR_TOTAL * STAR_MOST.sats);
+        const starBondMesh = new THREE.InstancedMesh(GEO.bond, MAT.bond, STAR_TOTAL * STAR_MOST.bonds);
+
+        /* halo quads for the big atoms only - the satellites already sit
+           inside their parents' bloom */
+        const starGlowBase = [0, starFamilyCap[0], starFamilyCap[0] + starFamilyCap[1]];
+        const starGlowStride = starFamilyCap[0] + starFamilyCap[1] + starFamilyCap[2];
+        const starGlowMesh = new THREE.InstancedMesh(GEO.glow, MAT.glow, STAR_TOTAL * starGlowStride);
+
+        starFamilyMeshes.forEach(m => { m.frustumCulled = false; starField.add(m); });
+        starSatMesh.frustumCulled = false;
+        starBondMesh.frustumCulled = false;
+        starGlowMesh.frustumCulled = false;
+        starField.add(starSatMesh, starBondMesh, starGlowMesh);
+
+        const starSlots = [];
+        let starNamesReady = false;
+        const starRng = mulberry32(0xA17E5B);
+        const starTmp = new THREE.Vector3();
+        const starTmp2 = new THREE.Vector3();
+        const starDir = new THREE.Vector3();
+        const starEuler = new THREE.Euler();
+        let pointerX = 0;
+        let pointerY = 0;
+        let hoveredStar = -1;
+        let hoverClock = 0;
+        let diveVariant = 0;
+
+        function starDirection(out) {
+            const u = starRng() * 2 - 1;
+            const th = starRng() * Math.PI * 2;
+            const s = Math.sqrt(Math.max(0, 1 - u * u));
+            return out.set(s * Math.cos(th), u, s * Math.sin(th));
+        }
+
+        function starSpread() {
+            return STAR_NEAR + Math.sqrt(starRng()) * (STAR_FAR - STAR_NEAR);
+        }
+
+        function writeStar(slot) {
+            const span = slot.span * slot.zoom;
+            const q = slot.quat;
+            const c = slot.center;
+
+            const shape = slot.shape || CORE_TEMPLATE;
+            shape.families.forEach((list, fi) => {
+                const mesh = starFamilyMeshes[fi];
+                const cap = starFamilyCap[fi];
+                const base = slot.id * cap;
+                const gBase = slot.id * starGlowStride + starGlowBase[fi];
+                for (let j = 0; j < cap; j++) {
+                    const a = list[j];
+                    if (!a) {
+                        dummy.position.copy(c);
+                        dummy.quaternion.identity();
+                        dummy.scale.setScalar(0);
+                        dummy.updateMatrix();
+                        mesh.setMatrixAt(base + j, dummy.matrix);
+                        starGlowMesh.setMatrixAt(gBase + j, dummy.matrix);
+                        continue;
+                    }
+                    starTmp.copy(a.p).multiplyScalar(span).applyQuaternion(q).add(c);
+                    dummy.position.copy(starTmp);
+                    dummy.quaternion.identity();
+                    dummy.scale.setScalar(a.r * span);
+                    dummy.updateMatrix();
+                    mesh.setMatrixAt(base + j, dummy.matrix);
+                    mesh.setColorAt(base + j, a.c);
+                    // the same atom, one halo sized to the sphere it wraps
+                    dummy.scale.setScalar(a.r * span * GLOW_SCALE);
+                    dummy.updateMatrix();
+                    starGlowMesh.setMatrixAt(gBase + j, dummy.matrix);
+                    starGlowMesh.setColorAt(gBase + j, a.c);
+                }
+                mesh.instanceMatrix.needsUpdate = true;
+                if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+            });
+            starGlowMesh.instanceMatrix.needsUpdate = true;
+            if (starGlowMesh.instanceColor) starGlowMesh.instanceColor.needsUpdate = true;
+
+            const sats = shape.sats;
+            const sBase = slot.id * STAR_MOST.sats;
+            for (let j = 0; j < STAR_MOST.sats; j++) {
+                const s = sats[j];
+                if (!s) {
+                    dummy.position.copy(c);
+                    dummy.quaternion.identity();
+                    dummy.scale.setScalar(0);
+                    dummy.updateMatrix();
+                    starSatMesh.setMatrixAt(sBase + j, dummy.matrix);
+                    continue;
+                }
+                starTmp.copy(s.p).multiplyScalar(span).applyQuaternion(q).add(c);
+                dummy.position.copy(starTmp);
+                dummy.quaternion.identity();
+                dummy.scale.setScalar(s.r * span);
+                dummy.updateMatrix();
+                starSatMesh.setMatrixAt(sBase + j, dummy.matrix);
+                starSatMesh.setColorAt(sBase + j, s.c);
+            }
+            starSatMesh.instanceMatrix.needsUpdate = true;
+            if (starSatMesh.instanceColor) starSatMesh.instanceColor.needsUpdate = true;
+
+            const bonds = shape.bonds;
+            const bBase = slot.id * STAR_MOST.bonds;
+            for (let j = 0; j < STAR_MOST.bonds; j++) {
+                const b = bonds[j];
+                if (!b) {
+                    dummy.position.copy(c);
+                    dummy.quaternion.identity();
+                    dummy.scale.setScalar(0);
+                    dummy.updateMatrix();
+                    starBondMesh.setMatrixAt(bBase + j, dummy.matrix);
+                    continue;
+                }
+                starTmp.copy(b.a).multiplyScalar(span).applyQuaternion(q).add(c);
+                starTmp2.copy(b.b).multiplyScalar(span).applyQuaternion(q).add(c);
+                starDir.subVectors(starTmp2, starTmp);
+                const len = starDir.length() || 1e-4;
+                dummy.position.copy(starTmp).add(starTmp2).multiplyScalar(0.5);
+                dummy.quaternion.setFromUnitVectors(UP, starDir.multiplyScalar(1 / len));
+                dummy.scale.setScalar(len);
+                dummy.updateMatrix();
+                starBondMesh.setMatrixAt(bBase + j, dummy.matrix);
+                starBondMesh.setColorAt(bBase + j, b.c);
+            }
+            starBondMesh.instanceMatrix.needsUpdate = true;
+            if (starBondMesh.instanceColor) starBondMesh.instanceColor.needsUpdate = true;
+        }
+
+        /* ================================================================
+           THE FOLD IS A REAL DESCENT
+           Zoom past the fold and the atom you are aimed at stops being an
+           atom: that exact point becomes the centre of a brand new
+           procedurally generated molecule sized to the atom it replaces.
+           The eye is not moved, so the picture does not jump - one atom
+           simply becomes the next molecule, forever.
+           ================================================================ */
+        function enterAtom(slot) {
+            const shape = slot.shape || CORE_TEMPLATE;
+            const span = slot.span * slot.zoom;
+            if (!(span > 0)) return false;
+            const aim = starTmp2.copy(slot.center).sub(camera.position);
+            const aimLen = aim.length() || 1e-6;
+            aim.multiplyScalar(1 / aimLen);
+            let pick = null;
+            let bestDot = -2;
+            for (const list of shape.families) {
+                for (const a of list) {
+                    starTmp.copy(a.p).multiplyScalar(span).applyQuaternion(slot.quat).add(slot.center);
+                    starDir.copy(starTmp).sub(camera.position);
+                    const d = starDir.length() || 1e-6;
+                    const dot = starDir.multiplyScalar(1 / d).dot(aim);
+                    if (dot > bestDot) {
+                        bestDot = dot;
+                        pick = { p: starTmp.clone(), r: a.r * span };
+                    }
+                }
+            }
+            if (!pick || !(pick.r > 0)) return false;
+            /* that atom's whole volume becomes the next molecule, so it is
+               exactly as big on screen as the atom was a frame ago */
+            slot.center.copy(pick.p);
+            slot.span = pick.r;
+            slot.zoom = 1;
+            diveVariant = (diveVariant + 1) % STAR_VARIANTS.length;
+            slot.shape = STAR_VARIANTS[diveVariant];
+            slot.fold = (slot.fold || 0) + 1;
+            refreshStarLabel(slot);
+            writeStar(slot);
+            return true;
+        }
+
+        function starNameFor(slot) {
+            const fold = slot.fold || 0;
+            const seed = (Math.imul(slot.id + 1, 0x9E3779B1) ^
+                Math.imul(fold + 1, 0x27D4EB2F) ^ 0x51A7E) >>> 0;
+            return structureName(seed, 'molecule');
+        }
+        function starBaseTag(slot) {
+            const width = slot.fixed ? 2 : 3;
+            return (slot.fixed ? 'H' : 'S') + String(slot.id + 1).padStart(width, '0');
+        }
+        function refreshStarLabel(slot) {
+            if (!slot.baseTag) slot.baseTag = starBaseTag(slot);
+            slot.tag = slot.baseTag + (slot.fold
+                ? '.' + String(slot.fold).padStart(2, '0')
+                : '');
+            slot.name = starNamesReady
+                ? starNameFor(slot)
+                : (slot.fixed ? 'HOUSE MOLECULE' : 'CORE MOLECULE');
+        }
+        function placeStar(slot, center, spanFixed) {
+            slot.center.copy(center);
+            const room = Math.max(120, slot.center.distanceTo(camera.position) * 0.4);
+            slot.span = spanFixed || Math.min(room, 230 + Math.pow(starRng(), 1.7) * 620);
+            slot.zoom = 1;
+            slot.fold = 0;
+            refreshStarLabel(slot);
+            starEuler.set(starRng() * 6.2832, starRng() * 6.2832, starRng() * 6.2832);
+            slot.quat.setFromEuler(starEuler);
+            writeStar(slot);
+        }
+
+        for (let i = 0; i < STAR_TOTAL; i++) {
+            const slot = {
+                id: i, center: new THREE.Vector3(), quat: new THREE.Quaternion(),
+                span: 1, zoom: 1, name: '', tag: '', shape: CORE_TEMPLATE, fixed: false
+            };
+            starSlots.push(slot);
+        }
+        /* ---- the house: every molecule on its frame, never recycled ---- */
+        const houseRng = mulberry32(0x48A05E + 7);
+        HOUSE_POINTS.forEach((p, i) => {
+            const slot = starSlots[i];
+            slot.fixed = true;
+            slot.shape = STAR_VARIANTS[i % STAR_VARIANTS.length];
+            placeStar(slot, starTmp.copy(HOUSE_ORIGIN).add(p), 250 + houseRng() * 150);
+        });
+        /* ---- everything after that is the endless sky ---- */
+        for (let i = HOUSE_POINTS.length; i < STAR_TOTAL; i++) {
+            const slot = starSlots[i];
+            slot.shape = CORE_TEMPLATE;
+            placeStar(slot, starDirection(starTmp).multiplyScalar(starSpread()));
+        }
+
+        /* ---- the nearest molecules are literal clones of the core level:
+           same atoms, same recursive satellites, same rings, same dust
+           and glow - fly up to one and it is the centre, again ---- */
+        const CORE_CLONES = [];
+        let coreClonesBuilt = false;
+        function buildCoreClones() {
+            if (coreClonesBuilt) return;
+            coreClonesBuilt = true;
+            for (let i = 0; i < 16; i++) {
+            const level = buildLevel(0, 0);
+            starDirection(starDir);
+            starDir.y = Math.abs(starDir.y) * 0.6;
+            level.position.copy(starDir).multiplyScalar(1100 + i * 190);
+            level.scale.setScalar(220 + (i % 4) * 70);
+            level.rotation.set(starRng() * 6.2832, starRng() * 6.2832, starRng() * 6.2832);
+            level.userData.cloneIndex = i;
+            scene.add(level);
+            CORE_CLONES.push(level);
+        }
+            moleculeCountEl.textContent = String(starSlots.length + CORE_CLONES.length + 1);
+        }
+        /* fixed in world space: fly into it and you reach the molecules. what
+           you leave far behind is recycled out of view, a few per frame */
+        function updateStars(dt) {
+            if (soloCore) return;
+            const cam = camera.position;
+            buildCoreClones();
+            for (const lv of CORE_CLONES) { lv.rotation.y += dt * 0.05; lv.rotation.x += dt * 0.015; }
+            let budget = 32;
+            for (let i = 0; i < starSlots.length && budget > 0; i++) {
+                const slot = starSlots[i];
+                if (slot.id === focusedStar) continue;
+                if (slot.fixed) continue;            // the house never moves
+                starTmp.subVectors(slot.center, cam);
+                const dist = starTmp.length();
+                if (dist <= STAR_WRAP) continue;
+                /* anything still in front of the eye stays exactly where it
+                   is, however far out you have flown - the molecule you are
+                   heading for can never blink out of the sky. only what you
+                   have already flown past is handed a new home, far ahead. */
+                if (starTmp.multiplyScalar(1 / dist).dot(camFwd) > -0.1) continue;
+                budget--;
+                starDirection(starDir);
+                starDir.multiplyScalar(0.6).add(camFwd).normalize();
+                starTmp.copy(cam).addScaledVector(starDir,
+                    STAR_FAR * (STAR_REBIRTH_NEAR + starRng() * 0.26));
+                placeStar(slot, starTmp);
+            }
+        }
+
+        const starTip = document.getElementById('star-tip');
+        const starTipName = document.getElementById('star-tip-name');
+        const starTipMeta = document.getElementById('star-tip-meta');
+        const moleculeCountEl = document.getElementById('molecule-count');
+        moleculeCountEl.textContent = String(starSlots.length + 1);
+
+        /* ---- solo toggle: strip the universe back to the one core ---- */
+        const btnSolo = document.getElementById('btn-solo');
+        const textSolo = document.getElementById('text-solo');
+        const iconSolo = document.getElementById('icon-solo');
+        let soloCore = false;
+
+        function applySolo() {
+            starField.visible = !soloCore;
+            for (const lv of CORE_CLONES) lv.visible = !soloCore;
+            if (soloCore) {
+                hoveredStar = -1;
+                focusedStar = -1;
+                starDive = false;
+                if (starTip) starTip.style.opacity = '0';
+            }
+            textSolo.textContent = soloCore ? 'ALL MOLECULES' : 'SOLO CORE';
+            iconSolo.className = soloCore
+                ? 'fa-solid fa-atom text-sky-400'
+                : 'fa-solid fa-layer-group text-purple-400';
+            moleculeCountEl.textContent = soloCore ? '1' : String(starSlots.length + CORE_CLONES.length + 1);
+        }
+        btnSolo.onclick = () => { soloCore = !soloCore; applySolo(); };
+
+        /* ---- random colour cycle for the whole molecule ---- */
+        const btnCycle = document.getElementById('btn-cycle');
+        const textCycle = document.getElementById('text-cycle');
+        const iconCycle = document.getElementById('icon-cycle');
+        let colorCycle = false;
+        let colorClock = 0;
+        btnCycle.onclick = () => {
+            colorCycle = !colorCycle;
+            textCycle.textContent = colorCycle ? 'COLOR: ON' : 'COLOR CYCLE';
+            iconCycle.className = colorCycle
+                ? 'fa-solid fa-palette text-sky-400 animate-pulse'
+                : 'fa-solid fa-palette text-purple-400';
+        };
+
+        /* ---- bonds on/off: the thin mucus strands between the atoms ---- */
+        const btnBonds = document.getElementById('btn-bonds');
+        const textBonds = document.getElementById('text-bonds');
+        const iconBonds = document.getElementById('icon-bonds');
+        let bondsOn = true;
+        function applyBonds() {
+            /* one shared material drives every strand in the scene - the
+               exhibit's bonds and the stars' bonds alike */
+            MAT.bond.visible = bondsOn;
+            textBonds.textContent = bondsOn ? 'BONDS: ON' : 'BONDS: OFF';
+            iconBonds.className = bondsOn
+                ? 'fa-solid fa-link text-purple-400'
+                : 'fa-solid fa-link-slash text-zinc-500';
+        }
+        btnBonds.onclick = () => { bondsOn = !bondsOn; applyBonds(); };
+        applyBonds();
+
+        function pickStar() {
+            let best = -1;
+            let bestScore = Infinity;
+            const tanHalf = Math.tan((camera.fov * Math.PI) / 360);
+            const aspectFix = window.innerWidth / Math.max(1, window.innerHeight);
+            for (const slot of starSlots) {
+                const dist = slot.center.distanceTo(camera.position);
+                if (dist < 1) continue;
+                starTmp.copy(slot.center).project(camera);
+                if (starTmp.z < -1 || starTmp.z > 1) continue;
+                // the molecule's real radius on screen: you can click anywhere
+                // on the thing, not just a dot at its centre
+                const radius = Math.max(0.05, ((slot.span * slot.zoom) / dist) / tanHalf);
+                const dx = starTmp.x - pointerNDC.x;
+                const dy = (starTmp.y - pointerNDC.y) * aspectFix;
+                const d = Math.hypot(dx, dy);
+                if (d > radius) continue;
+                const score = d / radius + dist * 0.00001;
+                if (score < bestScore) { bestScore = score; best = slot.id; }
+            }
+            return best;
+        }
+
+        function updateHover(dt) {
+            hoverClock += dt;
+            if (hoverClock < 0.1) return;
+            hoverClock = 0;
+            if (soloCore) {
+                hoveredStar = -1;
+                if (starTip) starTip.style.opacity = '0';
+                return;
+            }
+            hoveredStar = pickStar();
+            if (hoveredStar < 0 || !starTip) {
+                if (starTip) starTip.style.opacity = '0';
+                renderer.domElement.style.cursor = 'crosshair';
+                return;
+            }
+            const slot = starSlots[hoveredStar];
+            const dist = slot.center.distanceTo(camera.position);
+            starTip.style.opacity = '1';
+            starTip.style.left = pointerX + 'px';
+            starTip.style.top = pointerY + 'px';
+            starTipName.textContent = slot.tag + ' · ' + slot.name;
+            starTipMeta.textContent =
+                (slot.id === focusedStar ? (starDive ? 'DIVING · ' : 'LOCKED · ') : '') +
+                (dist / 100).toFixed(2) + ' km · ' + slot.zoom.toFixed(1) + '× · ' +
+                (slot.id === focusedStar ? (starDive ? 'click to stop' : 'click to dive') : 'click to dive');
+            renderer.domElement.style.cursor = 'pointer';
+        }
+
+        /* one persistent label per star slot; the text follows the molecule,
+           while a fold gives it a deeper procedural designation */
+        let starLabelEls = null;
+        let starLabelClock = 0;
+        function ensureStarLabels() {
+            if (starLabelEls) return starLabelEls;
+            const host = document.getElementById('star-labels');
+            if (!host) return null;
+            starLabelEls = starSlots.map(() => {
+                const el = document.createElement('div');
+                el.className = 'star-label';
+                const tag = document.createElement('b');
+                const name = document.createElement('span');
+                el.appendChild(tag);
+                el.appendChild(document.createTextNode(' \u00b7 '));
+                el.appendChild(name);
+                el.style.opacity = '0';
+                host.appendChild(el);
+                return { el, tag, name };
+            });
+            return starLabelEls;
+        }
+        function updateStarLabels(dt) {
+            if (soloCore) {
+                if (starLabelEls) for (const li of starLabelEls) li.el.style.opacity = '0';
+                return;
+            }
+            starLabelClock += dt;
+            if (starLabelClock < 0.05) return;
+            starLabelClock = 0;
+            const labels = ensureStarLabels();
+            if (!labels) return;
+            camera.updateMatrixWorld();
+            const W = window.innerWidth, H = window.innerHeight;
+            for (let i = 0; i < starSlots.length; i++) {
+                const slot = starSlots[i];
+                const li = labels[i];
+                const v = starTmp.copy(slot.center).project(camera);
+                const visible = v.z > -1 && v.z < 1 &&
+                    v.x > -1.05 && v.x < 1.05 &&
+                    v.y > -1.05 && v.y < 1.05 &&
+                    slot.center.distanceToSquared(camera.position) > 1;
+                if (!visible) {
+                    if (li.el.style.opacity !== '0') li.el.style.opacity = '0';
+                    continue;
+                }
+                const x = (v.x * 0.5 + 0.5) * W;
+                const y = (-v.y * 0.5 + 0.5) * H;
+                li.el.style.transform = 'translate(' + x.toFixed(1) + 'px,' +
+                    y.toFixed(1) + 'px) translate(-50%,-150%)';
+                if (li.tag.textContent !== slot.tag) li.tag.textContent = slot.tag;
+                if (li.name.textContent !== slot.name) li.name.textContent = slot.name;
+                if (li.el.style.opacity !== '1') li.el.style.opacity = '1';
+            }
+        }
+        /* ---- architectural geometry helpers ---- */
+        function boxUV(w, h, d, tile) {
+            const g = new THREE.BoxGeometry(w, h, d);
+            const uv = g.attributes.uv;
+            const su = Math.max(w, d) / tile, sv = h / tile;
+            for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * su, uv.getY(i) * sv);
+            uv.needsUpdate = true;
+            return g;
+        }
+        // Curtain wall with a round aperture centred on the dive axis.
+        const WALL_GEO = (() => {
+            const w = 1.04, h = 0.85;
+            const shape = new THREE.Shape();
+            shape.moveTo(-w / 2, -h / 2);
+            shape.lineTo(w / 2, -h / 2);
+            shape.lineTo(w / 2, h / 2);
+            shape.lineTo(-w / 2, h / 2);
+            shape.closePath();
+            const hole = new THREE.Path();
+            hole.absarc(0, 0.125, 0.245, 0, Math.PI * 2, true);
+            shape.holes.push(hole);
+            const g = new THREE.ShapeGeometry(shape, 28);
+            const uv = g.attributes.uv;
+            for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) / TILE, uv.getY(i) / TILE);
+            uv.needsUpdate = true;
+            return g;
+        })();
+        /* ================================================================
+           PROCEDURAL STRUCTURE GENERATOR
+           Every cycle generates a brand new object: molecular clusters,
+           polyhedral cages, armillary rotors, crystal lattices, helices.
+           All of them are built to sit inside the [INNER .. 1] shell and
+           to leave the optical axis clear, so the dive never headbutts an
+           atom and the next structure is always visible in the core.
+           ================================================================ */
+        function makeStructure(index, seedShift = 0) {
+            const rng = mulberry32(hash32(Math.imul(index, 0x27D4EB2F) ^ CFG.seed ^ Math.imul(seedShift + 1, 0x9E3779B1)));
+            const atoms = [];
+            const bonds = [];
+            const rings = [];
+            const bondKeys = new Set();
+            // Two spectral families, exactly like the reference plates:
+            // cool electric blue/cyan and warm incandescent red/orange.
+            const coolA = new THREE.Color().setHSL(0.575, 0.95, 0.58);
+            const coolB = new THREE.Color().setHSL(0.62, 1.0, 0.7);
+            const warmA = new THREE.Color().setHSL(0.015, 1.0, 0.55);
+            const warmB = new THREE.Color().setHSL(0.055, 0.95, 0.63);
+            const white = new THREE.Color().setHSL(0.58, 0.35, 0.86);
+            const palette = [coolA, coolB, warmA, warmB, white];
+            const pickColor = () => {
+                const r = rng();
+                if (r < 0.5) return rng() < 0.5 ? coolA : coolB;
+                if (r < 0.91) return rng() < 0.5 ? warmA : warmB;
+                return white;
+            };
+            const teamOf = col => (col === warmA || col === warmB) ? 1 : (col === white ? 2 : 0);
+            const addAtom = (x, y, z, radius, color) => {
+                let px = x, py = y;
+                const planar = Math.hypot(px, py);
+                if (planar < 0.2) {
+                    if (planar < 1e-4) {
+                        const a = rng() * Math.PI * 2;
+                        px = Math.cos(a) * 0.2;
+                        py = Math.sin(a) * 0.2;
+                    } else {
+                        px *= 0.2 / planar;
+                        py *= 0.2 / planar;
+                    }
+                }
+                const p = new THREE.Vector3(px, py, z);
+                const len = p.length();
+                if (len > 0.995) p.multiplyScalar(0.995 / len);
+                else if (len < CFG.INNER) p.setLength(CFG.INNER);
+                const col = color || pickColor();
+                atoms.push({ p, r: radius, c: col, t: teamOf(col) });
+                return atoms.length - 1;
+            };
+            const addBond = (i, j, radius) => {
+                if (i === j || i == null || j == null) return;
+                const key = i < j ? i * 10009 + j : j * 10009 + i;
+                if (bondKeys.has(key)) return;
+                bondKeys.add(key);
+                bonds.push({
+                    a: atoms[i].p, b: atoms[j].p, r: radius || 0.0085,
+                    ca: atoms[i].c, cb: atoms[j].c
+                });
+            };
+            const addRing = (radius, tilt) => {
+                rings.push({ radius, tilt: tilt || 0 });
+            };
+            const roll = rng();
+            // The outermost structures are architecture; past them the dive
+            // is made purely of procedural molecular matter.
+            const kind = index === 0 ? 'helix' : roll < 0.24 ? 'molecule'
+                : roll < 0.44 ? 'cage'
+                : roll < 0.62 ? 'armillary'
+                : roll < 0.84 ? 'lattice'
+                : 'helix';
+            if (kind === 'building') {
+                /* ============================================================
+                   A STRUCTURED BUILDING BUILT OUT OF MOLECULES
+                   Plinth, four corner towers with molecular finials, curtain
+                   walls with four rose-window apertures, rafters, spire.
+                   Every member is atoms and bonds - nothing is a textured
+                   box. The rose windows sit on the orbit axis, so the nested
+                   structure is always framed by them.
+                   ============================================================ */
+                const half = 0.52;
+                const groundY = -0.55;
+                const eaveY = 0.3;
+                const towerTop = 0.46;
+                /* perimeter reference points shared by the eaves ring */
+                const pts = [
+                    [-half, -half], [0, -half], [half, -half], [half, 0],
+                    [half, half], [0, half], [-half, half], [-half, 0]
+                ];
+                /* ---- corner towers + molecular finials ---- */
+                for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+                    let prev = null;
+                    for (let k = 0; k <= 5; k++) {
+                        const t = k / 5;
+                        const idx = addAtom(
+                            sx * half, groundY + t * (towerTop - groundY), sz * half,
+                            0.031 - t * 0.012, palette[0]
+                        );
+                        if (prev != null) addBond(prev, idx, 0.0065);
+                        prev = idx;
+                    }
+                    for (let k = 0; k < 4; k++) {
+                        const a = (k / 4) * Math.PI * 2;
+                        const fin = addAtom(
+                            sx * half + Math.cos(a) * 0.06, towerTop + 0.05,
+                            sz * half + Math.sin(a) * 0.06, 0.013, palette[3]
+                        );
+                        addBond(prev, fin, 0.0045);
+                    }
+                }
+                /* ---- rose windows: molecular rings lining the stone apertures ---- */
+                const faces = [
+                    (u, y) => [u, y, half],
+                    (u, y) => [u, y, -half],
+                    (u, y) => [half, y, u],
+                    (u, y) => [-half, y, u]
+                ];
+                for (const toWorld of faces) {
+                    const win = [];
+                    const segs = 16;
+                    for (let i = 0; i < segs; i++) {
+                        const a = (i / segs) * Math.PI * 2;
+                        const [wx, wy, wz] = toWorld(Math.cos(a) * 0.245, Math.sin(a) * 0.245);
+                        win.push(addAtom(wx, wy, wz, 0.014, palette[1]));
+                    }
+                    win.forEach((idx, i) => addBond(idx, win[(i + 1) % win.length], 0.0035));
+                    for (let i = 0; i < 4; i++) {
+                        const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+                        const [wx, wy, wz] = toWorld(Math.cos(a) * 0.325, Math.sin(a) * 0.325);
+                        const spoke = addAtom(wx, wy, wz, 0.011, palette[2]);
+                        addBond(win[Math.round((i / 4 + 1 / 8) * segs) % segs], spoke, 0.003);
+                    }
+                }
+                /* ---- eaves, rafters, spire ---- */
+                const eave = pts.map(([x, z]) => addAtom(x, towerTop - 0.02, z, 0.023, palette[2]));
+                eave.forEach((idx, i) => addBond(idx, eave[(i + 1) % eave.length], 0.0055));
+                const apex = addAtom(0, 0.5, 0, 0.03, palette[1]);
+                eave.forEach(idx => addBond(idx, apex, 0.0055));
+                let spire = apex;
+                for (let k = 1; k <= 5; k++) {
+                    const t = k / 5;
+                    const idx = addAtom(0, 0.5 + t * 0.42, 0, 0.025 - t * 0.017, palette[2]);
+                    addBond(spire, idx, 0.005);
+                    spire = idx;
+                }
+            } else if (kind === 'molecule') {
+                /* ---- molecular cluster: nodes on a shell, nearest-neighbour bonds ---- */
+                const n = 16 + Math.floor(rng() * 10);
+                const idx = [];
+                for (let i = 0; i < n; i++) {
+                    const u = rng() * 2 - 1;
+                    const th = rng() * Math.PI * 2;
+                    const s = Math.sqrt(Math.max(0, 1 - u * u));
+                    const rad = 0.55 + rng() * 0.42;
+                    idx.push(addAtom(
+                        s * Math.cos(th) * rad, u * rad, s * Math.sin(th) * rad,
+                        0.026 + rng() * 0.03
+                    ));
+                }
+                for (let i = 0; i < n; i++) {
+                    const near = idx
+                        .map((j, k) => ({ k, d: atoms[idx[i]].p.distanceTo(atoms[j].p) }))
+                        .filter(o => o.k !== i)
+                        .sort((a, b) => a.d - b.d);
+                    const links = rng() < 0.55 ? 2 : 1;
+                    for (let l = 0; l < links; l++) addBond(idx[i], idx[near[l].k]);
+                }
+            } else if (kind === 'cage') {
+                /* ---- polyhedral cage: icosahedron shell + inner octahedron ---- */
+                const phi = (1 + Math.sqrt(5)) / 2;
+                const ico = [
+                    [-1, phi, 0], [1, phi, 0], [-1, -phi, 0], [1, -phi, 0],
+                    [0, -1, phi], [0, 1, phi], [0, -1, -phi], [0, 1, -phi],
+                    [phi, 0, -1], [phi, 0, 1], [-phi, 0, -1], [-phi, 0, 1]
+                ];
+                const outer = ico.map(v => {
+                    const p = new THREE.Vector3(v[0], v[1], v[2]).normalize().multiplyScalar(0.88 - rng() * 0.05);
+                    return addAtom(p.x, p.y, p.z, 0.032 + rng() * 0.012);
+                });
+                // connect every pair at (close to) the minimum vertex distance
+                let minD = Infinity;
+                for (let i = 0; i < outer.length; i++)
+                    for (let j = i + 1; j < outer.length; j++)
+                        minD = Math.min(minD, atoms[outer[i]].p.distanceTo(atoms[outer[j]].p));
+                for (let i = 0; i < outer.length; i++) {
+                    for (let j = i + 1; j < outer.length; j++) {
+                        if (atoms[outer[i]].p.distanceTo(atoms[outer[j]].p) < minD * 1.06) {
+                            addBond(outer[i], outer[j], 0.0095);
+                        }
+                    }
+                }
+                // inner octahedron, strutted out to the shell
+                const oct = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]
+                    .map(v => addAtom(v[0] * 0.52, v[1] * 0.52, v[2] * 0.52, 0.02));
+                const octEdges = [[0, 2], [0, 3], [0, 4], [0, 5], [1, 2], [1, 3], [1, 4], [1, 5], [2, 4], [2, 5], [3, 4], [3, 5]];
+                octEdges.forEach(e => addBond(oct[e[0]], oct[e[1]], 0.007));
+                for (const i of oct) {
+                    const near = outer
+                        .map(j => ({ j, d: atoms[i].p.distanceTo(atoms[j].p) }))
+                        .sort((a, b) => a.d - b.d);
+                    addBond(i, near[0].j, 0.0065);
+                    addBond(i, near[1].j, 0.0065);
+                }
+            } else if (kind === 'armillary') {
+                /* ---- armillary rotor: rings + spokes, all around the view axis ---- */
+                const count = 3 + Math.floor(rng() * 2);
+                const prev = [];
+                for (let i = 0; i < count; i++) {
+                    const radius = 0.5 + (i / count) * 0.5 + rng() * 0.03;
+                    const tilt = (rng() - 0.5) * 0.5;
+                    addRing(radius, tilt);
+                    const knots = 7 + Math.floor(rng() * 5);
+                    const spin = rng() * Math.PI * 2;
+                    const ringIdx = [];
+                    for (let k = 0; k < knots; k++) {
+                        const a = (k / knots) * Math.PI * 2 + spin;
+                        ringIdx.push(addAtom(
+                            Math.cos(a) * radius * Math.cos(tilt) * 0.97,
+                            Math.sin(a) * radius * 0.97,
+                            Math.sin(a) * radius * Math.sin(tilt),
+                            0.024 + rng() * 0.014
+                        ));
+                    }
+                    ringIdx.forEach((idx, k) => {
+                        if (prev.length) addBond(prev[Math.min(prev.length - 1, k)], idx, 0.007);
+                        addBond(idx, ringIdx[(k + 1) % ringIdx.length], 0.0055);
+                    });
+                    prev.length = 0;
+                    prev.push(...ringIdx);
+                }
+            } else if (kind === 'lattice') {
+                /* ---- crystal lattice: strutted cube frame ---- */
+                const h = 0.54 + rng() * 0.05;
+                const grid = [-h, 0, h];
+                const node = new Map();
+                for (const x of grid) {
+                    for (const y of grid) {
+                        for (const z of grid) {
+                            if (x === 0 && y === 0) continue; // keep the dive axis clear
+                            const key = `${x},${y},${z}`;
+                            const big = (x === 0 || y === 0) ? 0.018 : 0.03;
+                            node.set(key, addAtom(x, y, z, big + rng() * 0.012));
+                        }
+                    }
+                }
+                const link = (a, b) => {
+                    const ia = node.get(a), ib = node.get(b);
+                    if (ia != null && ib != null) addBond(ia, ib, 0.008);
+                };
+                for (const x of grid) {
+                    for (const y of grid) {
+                        for (const z of grid) {
+                            const key = `${x},${y},${z}`;
+                            if (!node.has(key)) continue;
+                            link(key, `${x + h},${y},${z}`);
+                            link(key, `${x},${y + h},${z}`);
+                            link(key, `${x},${y},${z + h}`);
+                        }
+                    }
+                }
+            } else {
+                /* ---- double helix ---- */
+                const turns = 2 + rng() * 1.2;
+                const steps = 26 + Math.floor(rng() * 8);
+                let prevA = null, prevB = null;
+                for (let i = 0; i < steps; i++) {
+                    const f = i / steps;
+                    const z = (f - 0.5) * 1.5;
+                    const a = f * turns * Math.PI * 2;
+                    const rad = 0.62 + rng() * 0.1;
+                    const ia = addAtom(Math.cos(a) * rad, Math.sin(a) * rad, z, 0.024 + rng() * 0.012);
+                    const ib = addAtom(Math.cos(a + Math.PI) * rad, Math.sin(a + Math.PI) * rad, z, 0.024 + rng() * 0.012);
+                    addBond(ia, ib, 0.006);
+                    if (prevA != null) {
+                        addBond(prevA, ia, 0.008);
+                        addBond(prevB, ib, 0.008);
+                    }
+                    prevA = ia;
+                    prevB = ib;
+                }
+            }
+            return { kind, atoms, bonds, rings };
+        }
+        /* ---------------------- procedural naming ----------------------- */
+        const KIND_LABELS = {
+            building: 'ATOMIC CATHEDRAL',
+            molecule: 'MOLECULAR CLUSTER',
+            cage: 'POLYHEDRAL CAGE',
+            armillary: 'ARMILLARY ROTOR',
+            lattice: 'CRYSTAL LATTICE',
+            helix: 'DOUBLE HELIX'
+        };
+        const KIND_HEAD = {
+            building: ['Gothic', 'Ashen', 'Obsidian', 'Sunken', 'Prime'],
+            molecule: ['Carbon', 'Amino', 'Silica', 'Thiol', 'Porphyrin'],
+            cage: ['Icosa', 'Dodeca', 'Bucky', 'Fuller', 'Vertex'],
+            armillary: ['Gyro', 'Armillary', 'Orrery', 'Rotor', 'Astrolabe'],
+            lattice: ['Crystal', 'Quartz', 'Halite', 'Spinel', 'Fluorite'],
+            helix: ['Helix', 'Genome', 'Nucleo', 'Coil', 'Spiral']
+        };
+        const NAME_TAIL = ['Bloom', 'Cluster', 'Cage', 'Lattice', 'Fold', 'Shell',
+            'Array', 'Assembly', 'Weave', 'Core', 'Engine', 'Reliquary'];
+        const BUILDING_TAIL = ['Cathedral', 'Basilica', 'Spire', 'Keep', 'Sanctum'];
+        function structureName(index, kind) {
+            const rng = mulberry32(hash32(Math.imul(index, 7919) + CFG.seed));
+            const heads = KIND_HEAD[kind] || KIND_HEAD.molecule;
+            const tails = kind === 'building' ? BUILDING_TAIL : NAME_TAIL;
+            return heads[Math.floor(rng() * heads.length)] + ' ' +
+                tails[Math.floor(rng() * tails.length)];
+        }
+        function nameAllStars() {
+            starNamesReady = true;
+            for (const slot of starSlots) refreshStarLabel(slot);
+        }
+        nameAllStars();
+        /* ================================================================
+           BUILD ONE NESTED STRUCTURE
+           ================================================================ */
+        function buildLevel(index, seedShift) {
+            const structure = makeStructure(index, seedShift || 0);
+            const group = new THREE.Group();
+            group.userData.kind = structure.kind;
+            group.userData.name = structureName(index, structure.kind);
+            const disposables = [];
+            // Every atom in the level - structure atoms AND every wall node -
+            // feeds the recursive matter pass, so the walls are built from
+            // exactly the same molecules as the centre.
+            const matterSources = [];   // { p, r, c }
+            /* ---- atoms: one instanced draw per spectral family ---- */
+            const families = [
+                { mat: MAT.atomCool, list: [] },
+                { mat: MAT.atomWarm, list: [] },
+                { mat: MAT.atomWhite, list: [] }
+            ];
+            structure.atoms.forEach(atom => {
+                families[atom.t || 0].list.push(atom);
+                matterSources.push({ p: atom.p, r: atom.r * 1.7, c: atom.c });
+            });
+            for (const family of families) {
+                if (!family.list.length) continue;
+                const mesh = new THREE.InstancedMesh(GEO.atom, family.mat, family.list.length);
+                family.list.forEach((atom, i) => {
+                    dummy.position.copy(atom.p);
+                    dummy.quaternion.identity();
+                    dummy.scale.setScalar(atom.r * 1.7);   // chunky atoms, thin strands
+                    dummy.updateMatrix();
+                    mesh.setMatrixAt(i, dummy.matrix);
+                    mesh.setColorAt(i, atom.c);
+                });
+                mesh.instanceMatrix.needsUpdate = true;
+                if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+                mesh.frustumCulled = false;
+                group.add(mesh);
+            }
+            /* ---- the halo blooming out of every atom of this structure ---- */
+            if (structure.atoms.length) {
+                const glow = new THREE.InstancedMesh(GEO.glow, MAT.glow, structure.atoms.length);
+                structure.atoms.forEach((atom, i) => {
+                    dummy.position.copy(atom.p);
+                    dummy.quaternion.identity();
+                    dummy.scale.setScalar(atom.r * 1.7 * GLOW_SCALE);
+                    dummy.updateMatrix();
+                    glow.setMatrixAt(i, dummy.matrix);
+                    glow.setColorAt(i, atom.c);
+                });
+                glow.instanceMatrix.needsUpdate = true;
+                if (glow.instanceColor) glow.instanceColor.needsUpdate = true;
+                glow.frustumCulled = false;
+                group.add(glow);
+            }
+            /* ================================================================
+               RECURSIVE MATTER
+               No atom in this world is a bare sphere. Every atom - including
+               every node of every wall - carries its own satellite molecules
+               and orbiting particles, so a wall is literally built out of
+               the same molecules you see in the centre, and the level chain
+               repeats that all the way down.
+               Runs after the architecture, so wall nodes are included.
+               ================================================================ */
+            const emitRecursiveMatter = () => {
+                const n = matterSources.length;
+                if (!n) return;
+                const subs = new THREE.InstancedMesh(GEO.node, MAT.atomWhite, n * 6);
+                const tint = new THREE.Color();
+                let s = 0;
+                matterSources.forEach((atom, ai) => {
+                    const seed = hash32(ai * 7919 + index * 104729);
+                    const phase = ((seed & 1023) / 1023) * Math.PI * 2;
+                    const tilt = (((seed >>> 10) & 255) / 255) * Math.PI;
+                    const orbit = atom.r * 1.5;
+                    for (let m = 0; m < 2; m++) {
+                        const a = phase + m * Math.PI;
+                        const sat = new THREE.Vector3(
+                            atom.p.x + Math.cos(a) * orbit * Math.cos(tilt),
+                            atom.p.y + Math.sin(tilt) * orbit,
+                            atom.p.z + Math.sin(a) * orbit * Math.cos(tilt)
+                        );
+                        const satR = atom.r * 0.42;
+                        dummy.position.copy(sat);
+                        dummy.quaternion.identity();
+                        dummy.scale.setScalar(satR);
+                        dummy.updateMatrix();
+                        subs.setMatrixAt(s, dummy.matrix);
+                        tint.copy(atom.c).lerp(WHITE, 0.4);
+                        subs.setColorAt(s, tint);
+                        s++;
+                        // and every satellite is a molecule of its own atoms
+                        for (let k = 0; k < 2; k++) {
+                            const ca = a + Math.PI * 0.5 + k * Math.PI;
+                            dummy.position.set(
+                                sat.x + Math.cos(ca) * satR * 1.9,
+                                sat.y + Math.sin(ca * 0.7) * satR * 1.5,
+                                sat.z + Math.sin(ca) * satR * 1.9
+                            );
+                            dummy.quaternion.identity();
+                            dummy.scale.setScalar(satR * 0.5);
+                            dummy.updateMatrix();
+                            subs.setMatrixAt(s, dummy.matrix);
+                            subs.setColorAt(s, tint);
+                            s++;
+                        }
+                    }
+                });
+                subs.instanceMatrix.needsUpdate = true;
+                if (subs.instanceColor) subs.instanceColor.needsUpdate = true;
+                subs.frustumCulled = false;
+                group.add(subs);
+                /* no additive particle sprites: they were light points
+                   floating in the molecule, and they are gone too. */
+            };
+            /* the per-atom bloom halos are gone: they were the light sitting
+               in the middle of every sphere, and they are what turned the
+               inside of the molecule into a white smear. */
+            /* ---- bonds ---- */
+            if (structure.bonds.length) {
+                const bonds = new THREE.InstancedMesh(GEO.bond, MAT.bond, structure.bonds.length);
+                const dir = new THREE.Vector3();
+                const tint = new THREE.Color();
+                structure.bonds.forEach((bond, i) => {
+                    dir.subVectors(bond.b, bond.a);
+                    const len = dir.length() || 1e-4;
+                    dummy.position.copy(bond.a).add(bond.b).multiplyScalar(0.5);
+                    dummy.quaternion.setFromUnitVectors(UP, dir.multiplyScalar(1 / len));
+                    dummy.scale.setScalar(len);
+                    dummy.updateMatrix();
+                    bonds.setMatrixAt(i, dummy.matrix);
+                    // every strand burns in the blend of the atoms it joins
+                    tint.copy(bond.ca).lerp(bond.cb, 0.5).lerp(WHITE, 0.32);
+                    bonds.setColorAt(i, tint);
+                });
+                if (bonds.instanceColor) bonds.instanceColor.needsUpdate = true;
+                bonds.instanceMatrix.needsUpdate = true;
+                bonds.frustumCulled = false;
+                group.add(bonds);
+            }
+            /* ---- machined rings ---- */
+            if (structure.rings.length) {
+                const rings = new THREE.InstancedMesh(GEO.ring, MAT.ring, structure.rings.length);
+                structure.rings.forEach((ring, i) => {
+                    dummy.position.set(0, 0, 0);
+                    dummy.rotation.set(ring.tilt, 0, 0);
+                    dummy.scale.setScalar(ring.radius);
+                    dummy.updateMatrix();
+                    rings.setMatrixAt(i, dummy.matrix);
+                });
+                rings.instanceMatrix.needsUpdate = true;
+                rings.frustumCulled = false;
+                group.add(rings);
+            }
+            // structure atoms and wall nodes are all in place now, so the
+            // recursive molecules can wrap every single one of them
+            emitRecursiveMatter();
+            /* the suspended glowing dust is gone as well - no light left in
+               the molecule at all, only flat geometry. */
+            group.userData.disposables = disposables;
+            return group;
+        }
+        /* ================================================================
+           NESTED WINDOW — only the structures around the camera exist.
+           ================================================================ */
+        function disposeLevel(level) {
+            level.traverse(obj => { if (obj.isInstancedMesh) obj.dispose(); });
+            (level.userData.disposables || []).forEach(res => res.dispose());
+        }
+        /* ================================================================
+           ONE EXHIBIT
+           A single complete nested world: its own levels, its own depth,
+           its own zoom pivot. The stars around it are molecules too, each
+           built from the same atoms and bonds as this one.
+           ================================================================ */
+        function makeChain(origin, seedShift, ahead, behind) {
+            const root = new THREE.Group();
+            root.position.copy(origin);
+            scene.add(root);
+            return {
+                root,
+                origin: origin.clone(),
+                seedShift,
+                ahead,
+                behind,
+                levels: new Map(),
+                depth: 0,
+                targetDepth: 0,
+                pivot: origin.clone(),
+                pivotTarget: origin.clone()
+            };
+        }
+        const chains = [
+            makeChain(new THREE.Vector3(0, 0, 0), 0, CFG.AHEAD, CFG.BEHIND)
+        ];
+        let active = chains[0];
+        function ensureWindow(chain) {
+            const base = Math.floor(chain.depth);
+            const min = base - chain.behind;
+            /* Nothing is culled by an arbitrary level count: a nested level is
+               kept for exactly as long as it still covers a fraction of a
+               pixel. Everything you could possibly see is drawn; only the
+               structures that have genuinely shrunk into nothing go away. */
+            const dist = Math.max(0.05, camera.position.distanceTo(chain.pivot));
+            const pxPerUnit = (window.innerHeight * 0.5) /
+                (Math.tan((camera.fov * Math.PI) / 360) * dist);
+            const MIN_PX = 0.05;
+            let max = base;
+            while (max - base < 12 &&
+                Math.pow(CFG.S, (max + 1) - chain.depth) * pxPerUnit >= MIN_PX) {
+                max++;
+            }
+            for (const [index, level] of chain.levels) {
+                if (index < min || index > max) {
+                    chain.root.remove(level);
+                    disposeLevel(level);
+                    chain.levels.delete(index);
+                }
+            }
+            for (let index = min; index <= max; index++) {
+                if (!chain.levels.has(index)) {
+                    const level = buildLevel(index, chain.seedShift);
+                    chain.root.add(level);
+                    chain.levels.set(index, level);
+                }
+            }
+            for (const [index, level] of chain.levels) {
+                level.scale.setScalar(Math.pow(CFG.S, index - base));
+            }
+            /* the pivot is the molecule under the cursor: it stays put while
+               the whole exhibit grows around it, so the camera never moves */
+            const travel = Math.pow(CFG.S, chain.depth - base);
+            const s = 1 / travel;
+            chain.baseScale = s;
+            chain.root.scale.setScalar(s);
+            chain.root.position.copy(chain.pivot);
+        }
+        /* switching exhibits keeps the camera exactly where it is */
+        function setActive(next) {
+            if (!next || next === active) return;
+            active.depth = state.depth;
+            active.targetDepth = state.targetDepth;
+            active = next;
+            state.depth = active.depth;
+            state.targetDepth = active.targetDepth;
+        }
+        /* ------------------------- state -------------------------------- */
+        const state = {
+            depth: 0,
+            targetDepth: 0,
+            auto: false,
+            direction: 1,
+            eye: new THREE.Vector3(0, 1.0, 8.0),        // the camera, in world space
+            idle: 10,                                   // seconds since the last input
+            yaw: 0,
+            pitch: -0.08
+        };
+        const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+        const SLIDER_SPAN = 120;   // slider 0..1000 maps to 0..120 cycles
+        /* ------------------------- DOM refs ----------------------------- */
+        const sliderZoom = document.getElementById('slider-zoom');
+        const labelMag = document.getElementById('label-mag');
+        const labelScale = document.getElementById('label-scale');
+        const stageLabel = document.getElementById('stage-label');
+        const btnAuto = document.getElementById('btn-auto');
+        const iconAuto = document.getElementById('icon-auto');
+        const textAuto = document.getElementById('text-auto');
+        const btnSpeed = document.getElementById('btn-speed');
+        const iconDir = document.getElementById('icon-dir');
+        const textDir = document.getElementById('text-dir');
+        const btnReset = document.getElementById('btn-reset');
+        const targetList = document.getElementById('target-list');
+        const targetCount = document.getElementById('target-count');
+        const toast = document.getElementById('found-toast');
+        const foundName = document.getElementById('found-name');
+        const fpsValue = document.getElementById('fps-value');
+        /* -------------------- tuning (left panel) ----------------------- */
+        const tune = { look: 1, move: 1, zoom: 1 };
+        const wireTune = (id, labelId, key) => {
+            const input = document.getElementById(id);
+            const label = document.getElementById(labelId);
+            if (!input || !label) return;
+            const apply = () => {
+                tune[key] = (+input.value) / 100;
+                label.textContent = (+tune[key].toFixed(2)) + '\u00d7';
+            };
+            input.addEventListener('input', apply);
+            apply();
+        };
+        wireTune('tune-look', 'val-look', 'look');
+        wireTune('tune-move', 'val-move', 'move');
+        wireTune('tune-zoom', 'val-zoom', 'zoom');
+        /* ------------------- procedural milestone nodes ------------------ */
+        const MILESTONES = [1, 2, 3, 5, 8, 13, 21];
+        const MILESTONE_ICONS = ['fa-atom', 'fa-gem', 'fa-bahai', 'fa-circle-nodes',
+            'fa-snowflake', 'fa-hurricane', 'fa-infinity'];
+        const reached = new Set();
+        const milestoneRows = [];
+        MILESTONES.forEach((depthGoal, i) => {
+            const preview = makeStructure(depthGoal);
+            const row = document.createElement('div');
+            row.className = 'flex items-center justify-between gap-2 text-zinc-400 bg-black/40 px-2.5 py-1 rounded-lg border border-purple-500/10 transition-colors';
+            const label = document.createElement('span');
+            label.className = 'truncate';
+            const icon = document.createElement('i');
+            icon.className = `fa-solid ${MILESTONE_ICONS[i]} mr-2 w-3.5 text-center text-zinc-500`;
+            label.appendChild(icon);
+            label.appendChild(document.createTextNode(structureName(depthGoal, preview.kind)));
+            const tag = document.createElement('span');
+            tag.className = 'text-[10px] text-sky-400/60 font-bold shrink-0';
+            tag.textContent = 'C' + depthGoal;
+            row.appendChild(label);
+            row.appendChild(tag);
+            targetList.appendChild(row);
+            milestoneRows.push({ row, icon, depthGoal });
+        });
+        targetCount.textContent = `0 / ${MILESTONES.length}`;
+        let toastTimer = 0;
+        function checkMilestones(depth) {
+            for (const m of milestoneRows) {
+                if (depth >= m.depthGoal && !reached.has(m.depthGoal)) {
+                    reached.add(m.depthGoal);
+                    m.row.className = 'flex items-center justify-between gap-2 text-sky-300 bg-purple-500/20 px-2.5 py-1 rounded-lg border border-sky-400/40 font-bold';
+                    m.icon.className = 'fa-solid fa-check mr-2 w-3.5 text-center text-sky-400';
+                    targetCount.textContent = `${reached.size} / ${MILESTONES.length}`;
+                    foundName.textContent = `Cycle ${m.depthGoal} · ${structureName(m.depthGoal, makeStructure(m.depthGoal).kind)}`;
+                    toast.classList.add('show');
+                    clearTimeout(toastTimer);
+                    toastTimer = setTimeout(() => toast.classList.remove('show'), 2600);
+                }
+            }
+        }
+        /* ------------------------- controls ----------------------------- */
+        const keys = Object.create(null);
+        window.addEventListener('keydown', e => {
+            keys[e.code] = true;
+            if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'ShiftLeft', 'ShiftRight'].includes(e.code)) starDive = false;
+            if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+        });
+        window.addEventListener('keyup', e => { keys[e.code] = false; });
+        const clearKeys = () => { for (const k in keys) keys[k] = false; };
+        window.addEventListener("blur", clearKeys);
+        document.addEventListener("visibilitychange", () => { if (document.hidden) clearKeys(); });
+        sliderZoom.addEventListener('input', e => {
+            state.targetDepth = (+e.target.value / 1000) * SLIDER_SPAN;
+            state.depth = state.targetDepth;
+        });
+        /* ---- zoom at the cursor: whatever the pointer is on becomes the new
+           centre of the infinite chain ---- */
+        function zoomAtPointer(dir) {
+            /* only a locked (clicked) molecule takes the wheel: hovering must
+               never steal the zoom away from the main dive */
+            const starTarget = focusedStar;
+            if (starTarget >= 0) {
+                const hoverSlot = starSlots[starTarget];
+                const step = Math.exp(-dir * 0.0012 * tune.zoom);
+                hoverSlot.zoom = Math.max(1, hoverSlot.zoom * step);
+                /* fold by descending into the atom you are aimed at - no
+                   rescale, no re-orientation, no jump in the picture */
+                if (hoverSlot.zoom > 24 && enterAtom(hoverSlot)) return;
+                // the player is carried into the molecule, not left outside
+                // watching it swell - and WASD keeps working the whole way in
+                camTmp.copy(state.eye).sub(hoverSlot.center).multiplyScalar(Math.pow(step, -1.15));
+                if (camTmp.lengthSq() < 1e-8) camTmp.set(1e-4, 0, 0);
+                state.eye.copy(hoverSlot.center).add(camTmp);
+                writeStar(hoverSlot);
+                return;
+            }
+            /* the sphere under the cursor is the molecule this dive descends
+               into, so the pivot becomes that atom's centre */
+            camera.updateMatrixWorld();
+            scene.updateMatrixWorld();
+            const ball = atomUnderPointer(active);
+            if (ball) {
+                /* moving the exhibit and the eye by the same vector leaves the
+                   picture untouched: no jump, no re-orientation, the pivot is
+                   simply re-centred on the ball you aimed at */
+                camTmp.subVectors(ball.point, active.pivot);
+                if (camTmp.lengthSq() > 1e-12) {
+                    state.eye.add(camTmp);
+                    active.pivot.copy(ball.point);
+                    active.pivotTarget.copy(ball.point);
+                    active.root.position.copy(active.pivot);
+                }
+            } else {
+                raycaster.setFromCamera(pointerNDC, camera);
+                raycaster.far = 20000;
+                let hit = null;
+                for (const c of chains) {
+                    const hits = raycaster.intersectObjects(c.root.children, true);
+                    if (hits.length && (!hit || hits[0].distance < hit.distance)) hit = hits[0];
+                }
+                // empty space under the cursor: keep magnifying about the last pivot
+                if (hit) active.pivotTarget.copy(hit.point);
+            }
+            state.targetDepth = clamp(state.targetDepth + dir * 0.012 * tune.zoom, 0, SLIDER_SPAN);
+        }
+        window.addEventListener('wheel', e => {
+            e.preventDefault();
+            starDive = false;
+            const hover = pickStar();
+            if (hover >= 0) focusedStar = hover;
+            zoomAtPointer(e.deltaY);
+        }, { passive: false });
+        let dragging = false;
+        let downX = 0;
+        let downY = 0;
+        let focusedStar = -1;
+        let starDive = false;
+        let lastX = 0, lastY = 0;
+        renderer.domElement.addEventListener('pointerdown', e => {
+            dragging = true;
+            downX = e.clientX;
+            downY = e.clientY;
+            lastX = e.clientX;
+            lastY = e.clientY;
+            renderer.domElement.setPointerCapture(e.pointerId);
+        });
+        const trackPointer = e => {
+            pointerX = e.clientX;
+            pointerY = e.clientY;
+            pointerNDC.set(
+                (e.clientX / window.innerWidth) * 2 - 1,
+                -(e.clientY / window.innerHeight) * 2 + 1
+            );
+        };
+        window.addEventListener('pointermove', e => {
+            trackPointer(e);
+            if (!dragging) return;
+            state.yaw -= (e.clientX - lastX) / window.innerWidth * 3.2 * tune.look;
+            state.pitch = clamp(state.pitch - (e.clientY - lastY) / window.innerHeight * 3.2 * tune.look, -1.5, 1.5);
+            lastX = e.clientX;
+            lastY = e.clientY;
+        });
+        window.addEventListener("pointerup", e => {
+            const tap = dragging && Math.hypot(e.clientX - downX, e.clientY - downY) < 6;
+            dragging = false;
+            if (!tap) { starDive = false; return; }
+            // pick at the exact click point, never a stale hover
+            pointerNDC.set(
+                (e.clientX / window.innerWidth) * 2 - 1,
+                -(e.clientY / window.innerHeight) * 2 + 1
+            );
+            pointerX = e.clientX;
+            pointerY = e.clientY;
+            const picked = pickStar();
+            if (picked >= 0) {
+                starDive = focusedStar === picked ? !starDive : true;
+                focusedStar = picked;
+            } else {
+                focusedStar = -1;
+                starDive = false;
+            }
+        });
+        btnAuto.onclick = () => {
+            state.auto = !state.auto;
+            textAuto.textContent = state.auto ? 'AUTO: ON' : 'AUTO: OFF';
+            iconAuto.className = state.auto ? 'fa-solid fa-pause' : 'fa-solid fa-play';
+        };
+        // free roaming is the default now: the dive is on the wheel, not on a timer
+        textAuto.textContent = 'AUTO: OFF';
+        state.auto = false;
+        iconAuto.className = 'fa-solid fa-play';
+        btnSpeed.onclick = () => {
+            state.direction *= -1;
+            textDir.textContent = state.direction > 0 ? 'INWARD' : 'OUTWARD';
+            iconDir.className = state.direction > 0
+                ? 'fa-solid fa-forward text-sky-400'
+                : 'fa-solid fa-backward text-sky-400';
+        };
+        btnReset.onclick = () => {
+            for (const c of chains) {
+                c.depth = 0;
+                c.targetDepth = 0;
+                c.pivot.copy(c.origin);
+            }
+            active = chains[0];
+            state.depth = 0;
+            state.targetDepth = 0;
+            state.eye.set(0, 1.0, 8.0);
+            state.yaw = 0;
+            state.pitch = -0.08;
+            focusedStar = -1;
+            starDive = false;
+        };
+        /* ================================================================
+           FRAME LOOP
+           ================================================================ */
+        function formatMag(v) {
+            if (v < 1000) return v.toFixed(0);
+            if (v < 1e6) return (v / 1000).toFixed(1) + 'k';
+            const e = Math.floor(Math.log10(v));
+            return (v / Math.pow(10, e)).toFixed(1) + 'e' + e;
+        }
+        function sizeLabel(depth) {
+            const exp = depth * Math.log10(CFG.S);
+            if (exp >= -2) {
+                const m = Math.pow(10, exp);
+                return m >= 0.01 ? (m * 100).toFixed(1) + ' cm' : (m * 1000).toFixed(2) + ' mm';
+            }
+            return '10^' + exp.toFixed(1) + ' m';
+        }
+        let lastFrame = performance.now();
+        let hudClock = 0;
+        let lastDepthApplied = 0;
+        let lastStage = '';
+        let fpsFrames = 0;
+        let fpsWindow = 0;
+        function update(dt) {
+            /* ---- fps counter: raw frames per second, no smoothing cap ---- */
+            fpsFrames++;
+            fpsWindow += dt;
+            if (fpsWindow >= 0.2) {
+                fpsValue.textContent = String(Math.round(fpsFrames / fpsWindow));
+                fpsFrames = 0;
+                fpsWindow = 0;
+            }
+            /* ================================================================
+               FREE FLIGHT
+               WASD moves the camera itself along its own axes. Nothing is
+               re-derived from a rail each frame, so the view never gets
+               snapped back or dragged toward the core while you fly or
+               look around - the dive only runs when you go idle.
+               ================================================================ */
+            const moving =
+                keys['KeyW'] || keys['KeyS'] || keys['KeyA'] || keys['KeyD'] ||
+                keys['ArrowUp'] || keys['ArrowDown'] || keys['ArrowLeft'] || keys['ArrowRight'] ||
+                keys['Space'] || keys['ShiftLeft'] || keys['ShiftRight'];
+            state.idle = (moving || dragging) ? 0 : state.idle + dt;
+            /* plain freecam: WASD moves the eye, the mouse is the only thing
+               that turns it. Nothing else touches camera position or rotation. */
+            const fly = 1200 * dt * tune.move;
+            camEuler.set(state.pitch, state.yaw, 0, 'YXZ');
+            camFwd.set(0, 0, -1).applyEuler(camEuler);
+            camRight.set(1, 0, 0).applyEuler(camEuler);
+            if (keys['KeyW'] || keys['ArrowUp']) state.eye.addScaledVector(camFwd, fly);
+            if (keys['KeyS'] || keys['ArrowDown']) state.eye.addScaledVector(camFwd, -fly);
+            if (keys['KeyD'] || keys['ArrowRight']) state.eye.addScaledVector(camRight, fly);
+            if (keys['KeyA'] || keys['ArrowLeft']) state.eye.addScaledVector(camRight, -fly);
+            if (keys['Space']) state.eye.y += fly;
+            if (keys['ShiftLeft'] || keys['ShiftRight']) state.eye.y -= fly;
+            camera.position.copy(state.eye);
+            camera.rotation.set(state.pitch, state.yaw, 0);
+            // stay inside the shell around the anchor, never fly into the void
+            // (kept below, once the current scale is known)
+            /* ---- the infinite dive only runs while the viewer is idle ---- */
+            if (state.auto && state.idle > 1.5) {
+                state.targetDepth += CFG.SPEED * dt * state.direction;
+            }
+            state.targetDepth = Math.max(0, state.targetDepth);
+            const ease = 1 - Math.exp(-6 * dt);
+            state.depth = Math.max(0, state.depth + (state.targetDepth - state.depth) * ease);
+            /* ---- every exhibit keeps its own window and scale ---- */
+            active.depth = state.depth;
+            active.targetDepth = state.targetDepth;
+            for (const c of chains) {
+                // the pivot glides to whatever you aimed at instead of snapping
+                c.pivot.lerp(c.pivotTarget, 1 - Math.exp(-10 * dt));
+                ensureWindow(c);
+            }
+            /* ---- zoom is travel, not a magnifying glass: as the world scales
+               about the pivot the viewer is carried in with it, so the whole
+               player ends up inside the molecule. WASD still applies on top,
+               so you can fly around while the dive is running. ---- */
+            const dDepth = state.depth - lastDepthApplied;
+            lastDepthApplied = state.depth;
+            if (Math.abs(dDepth) > 1e-5) {
+                const carry = Math.pow(CFG.S, dDepth * 1.15);
+                camTmp.copy(state.eye).sub(active.pivot).multiplyScalar(carry);
+                if (camTmp.lengthSq() < 1e-8) camTmp.set(1e-4, 0, 0);
+                state.eye.copy(active.pivot).add(camTmp);
+            }
+            const base = Math.floor(state.depth);
+            // the whole sky drifts, so the stars are alive too
+            updateStars(dt);
+            updateHover(dt);
+            if (starDive && focusedStar >= 0 && !soloCore) {
+                zoomAtPointer(-dt * 900 * tune.zoom);
+            }
+            updateStarLabels(dt);
+
+            /* ---- living molecules: every shell turns, breathes and morphs ---- */
+            const tNow = ATOM_TIME.value;
+            /* one breath for the whole exhibit, applied at the root: every
+               shell grows by the exact same factor, so the nesting can never
+               open a gap or overlap - and crossing a fold cannot pop the
+               picture, because no level carries a phase of its own */
+            const breathe = 1 + 0.03 * Math.sin(tNow * 0.9);
+            for (const c of chains) {
+                const cBase = Math.floor(c.depth);
+                for (const [index, level] of c.levels) {
+                    level.rotation.y += dt * 0.16 * (index % 2 ? 1 : -1);
+                    level.rotation.x += dt * 0.07 * (index % 3 === 0 ? -1 : 0.6);
+                    level.scale.setScalar(Math.pow(CFG.S, index - cBase));
+                }
+                c.root.scale.setScalar((c.baseScale || 1) * breathe);
+            }
+            /* the camera is purely the freecam above: the zoom lives entirely
+               in each exhibit's own scale, so nothing can turn or drag it. */
+            camera.position.copy(state.eye);
+            camera.rotation.set(state.pitch, state.yaw, 0);
+            /* ---- animate the atom plasma + the wall's atom field ---- */
+            ATOM_TIME.value += dt;
+            /* ---- the whole molecule drifts through random colours ---- */
+            if (colorCycle) {
+                colorClock += dt;
+                ATOM_CYCLE.value = Math.min(1, ATOM_CYCLE.value + dt * 2.5);
+                if (colorClock > 0.45) {
+                    colorClock = 0;
+                    cycleTarget.setHSL(Math.random(), 0.85, 0.62);
+                }
+                ATOM_TINT.value.lerp(cycleTarget, Math.min(1, dt * 3.2));
+            } else {
+                ATOM_CYCLE.value = Math.max(0, ATOM_CYCLE.value - dt * 3);
+            }
+            /* ---- every proton, neutron and electron glows: the emissive tint
+               cycles through the spectrum, the pulse breathes, and the closer
+               you magnify the hotter the atoms burn. Scrolling is the only
+               magnify control, and it is unbounded. ---- */
+            const tGlow = ATOM_TIME.value;
+            /* no lights, no emission: nothing brightens as you dive, so every
+               layer of the molecule stays readable at any magnification. */
+            /* ---- HUD ---- */
+            hudClock += dt;
+            if (hudClock > 0.08) {
+                hudClock = 0;
+                labelMag.textContent = '×' + formatMag(Math.pow(1 / CFG.S, state.depth));
+                labelScale.textContent = sizeLabel(state.depth);
+                sliderZoom.value = String(Math.min(1000, (state.depth / SLIDER_SPAN) * 1000));
+                // how many molecules are alive in the universe right now
+                moleculeCountEl.textContent = soloCore ? '1' : String(starSlots.length + CORE_CLONES.length + 1);
+                const liveLevel = active.levels.get(base);
+                if (liveLevel) {
+                    const stage = `${liveLevel.userData.name.toUpperCase()} · ${KIND_LABELS[liveLevel.userData.kind]} · C${base}`;
+                    if (stage !== lastStage) {
+                        stageLabel.textContent = stage;
+                        lastStage = stage;
+                    }
+                }
+            }
+            checkMilestones(state.depth);
+        }
+        /* ================================================================
+           UNCAPPED PRESENTATION
+           requestAnimationFrame is vsync-locked to the display refresh, so
+           it can physically never report more than 60/120/144 fps. This
+           loop runs on a MessageChannel instead: no vsync, no frame
+           limiter, no cap at all. It renders as fast as the machine allows
+           and the HUD reports the real throughput. It still yields between
+           frames, and parks itself while the tab is hidden so a background
+           tab cannot spin the fans.
+           ================================================================ */
+        /* A MessageChannel loop has no vsync, so it happily submits frames far
+           faster than the GPU drains them. That is what made a 300 "fps"
+           readout feel laggy: the queue keeps growing, so what you see lags
+           further and further behind your input. A 1x1 read from the back
+           buffer forces the frame to actually finish before the next one is
+           queued - still no artificial cap, the loop runs flat out, but the
+           HUD now reports frames the GPU really completed and latency stays
+           at one frame. */
+        const frameChannel = new MessageChannel();
+        const glSync = renderer.getContext();
+        const glPixel = new Uint8Array(4);
+        let loopOn = true;
+        let loopQueued = false;
+        const drainGPU = () => {
+            try {
+                glSync.readPixels(0, 0, 1, 1, glSync.RGBA, glSync.UNSIGNED_BYTE, glPixel);
+            } catch (err) {
+                try { glSync.finish(); } catch (e) { /* driver says no - fine */ }
+            }
+        };
+        const queueFrame = () => {
+            if (!loopOn || loopQueued) return;
+            loopQueued = true;
+            frameChannel.port2.postMessage(0);
+        };
+        const pump = () => {
+            loopQueued = false;
+            if (!loopOn) return;
+            const now = performance.now();
+            const dt = Math.min((now - lastFrame) / 1000, 0.05);
+            lastFrame = now;
+            update(dt);
+            renderer.render(scene, camera);
+            drainGPU();            // never queue faster than the GPU can drain
+            queueFrame();
+        };
+        frameChannel.port1.onmessage = pump;
+        document.addEventListener('visibilitychange', () => {
+            loopOn = !document.hidden;
+            if (loopOn) {
+                lastFrame = performance.now();
+                queueFrame();
+            }
+        });
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        });
+        queueFrame();
+    </script>
+    <div id="star-labels" aria-hidden="true"></div>
+    <div id="star-tip" style="position:fixed;left:0;top:0;z-index:40;pointer-events:none;opacity:0;transform:translate(-50%,-150%);transition:opacity .12s ease;">
+        <div style="background:rgba(8,10,18,.92);border:1px solid rgba(56,189,248,.45);box-shadow:0 0 18px rgba(56,189,248,.3);border-radius:10px;padding:6px 10px;white-space:nowrap;">
+            <div id="star-tip-name" style="font-family:Orbitron,sans-serif;font-size:10px;letter-spacing:.12em;color:#7dd3fc;font-weight:700;">MOLECULE</div>
+            <div id="star-tip-meta" style="font-family:monospace;font-size:10px;color:#a1a1aa;margin-top:2px;">-</div>
+        </div>
+    </div>
+</body>
+</html>
